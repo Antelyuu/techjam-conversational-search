@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shopping Agent Source Documentation</title>
+  <style>
+    :root { color-scheme: light; --ink:#172033; --muted:#5b6475; --line:#dbe2ec; --blue:#155eef; --bg:#f6f8fb; }
+    body { margin:0; font:16px/1.6 system-ui,-apple-system,sans-serif; color:var(--ink); background:var(--bg); }
+    main { max-width:980px; margin:0 auto; padding:42px 24px 70px; }
+    h1 { font-size:2.2rem; margin-bottom:8px; } h2 { margin-top:42px; border-bottom:1px solid var(--line); padding-bottom:8px; }
+    h3 { margin-top:28px; } p, li { max-width:82ch; } .lead { color:var(--muted); font-size:1.1rem; }
+    code, pre { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; } code { background:#eaf0f8; padding:2px 5px; border-radius:4px; }
+    pre { overflow:auto; background:#172033; color:#eef4ff; padding:18px; border-radius:9px; font-size:.9rem; }
+    table { border-collapse:collapse; width:100%; background:white; } th,td { border:1px solid var(--line); padding:10px; text-align:left; vertical-align:top; } th { background:#edf3fb; }
+    .flow { background:white; border-left:4px solid var(--blue); padding:16px 20px; margin:20px 0; } .note { color:var(--muted); }
+    a { color:var(--blue); }
+  </style>
+</head>
+<body><main>
+  <h1>Shopping Agent: Source Documentation</h1>
+  <p class="lead">A source-based guide to the current TikTok TechJam Track 4 starter agent. It documents what the code does today, not a proposed future architecture.</p>
+
+  <h2>Executive summary</h2>
+  <p>The agent is a stateless lexical retriever. It tokenizes the latest user message, builds an SQLite FTS5 <code>OR</code> query, ranks matching catalogue records with BM25, and returns product <code>parent_asin</code> values.</p>
+  <div class="flow"><strong>Request flow:</strong> catalogue → SQLite FTS5 index → latest message → tokenization → keyword query → BM25 ranking → recommendations → evaluator scoring</div>
+
+  <h2>Key source files</h2>
+  <table><tr><th>File</th><th>Purpose</th></tr>
+    <tr><td><a href="../starter/agent.py">starter/agent.py</a></td><td>Editable <code>Agent</code>, text conversion, tokenization, indexing, retrieval, and response formatting.</td></tr>
+    <tr><td><a href="local_evaluator.py">local_evaluator.py</a></td><td>Creates simulated turns, validates responses, detects hits, and computes metrics.</td></tr>
+    <tr><td><a href="agent_api_contract.json">agent_api_contract.json</a></td><td>Required reset and response schemas.</td></tr>
+  </table>
+
+  <h2>Methods in <code>starter/agent.py</code></h2>
+  <h3><code>_text(value)</code> — lines 17–24</h3>
+  <p>Converts catalogue fields into searchable strings. Dictionaries become <code>key value</code> pairs, lists become space-separated text, and missing values become an empty string.</p>
+  <pre>_text({"department": "womens"})  →  "department womens"
+_text(["walking shoe", "lightweight"])  →  "walking shoe lightweight"</pre>
+
+  <h3><code>_terms(text)</code> — lines 27–32</h3>
+  <p>Extracts lowercase alphanumeric tokens using <code>TOKEN_RE</code>, removes one-character tokens and the fixed <code>STOPWORDS</code> set, and returns a list. It does not understand that a number after “under” is a price constraint.</p>
+  <pre>_terms("Black running shoes under $120")
+→ ["black", "running", "shoes", "under", "120"]</pre>
+
+  <h3><code>Agent.__init__(catalog_path)</code> — lines 38–42</h3>
+  <p>Stores the catalogue path, opens an in-memory SQLite connection, creates an empty session-ID set, and builds the search index. Because the database is <code>:memory:</code>, the catalogue is indexed again each time an Agent is created.</p>
+
+  <h3><code>_build_index()</code> — lines 44–71</h3>
+  <p>Creates an FTS5 virtual table and loads every catalogue row in batches of 1,000. FTS5 is SQLite’s full-text search feature. The indexed fields are <code>title</code>, <code>categories</code>, <code>features</code>, <code>details</code>, <code>store</code>, and <code>description</code>; <code>parent_asin</code> is stored but marked <code>UNINDEXED</code>.</p>
+  <p>The catalogue is expected at <code>data/catalog.jsonl</code>. The current checkout does not contain that file.</p>
+
+  <h3><code>reset(session_id, user_profile)</code> — lines 73–75</h3>
+  <p>Marks a session as initialized. Although the profile is passed in, the current code ignores it. No conversation history or constraints are stored.</p>
+
+  <h3><code>respond(session_id, user_message, turn, top_k)</code> — lines 77–102</h3>
+  <ol>
+    <li>Rejects calls for sessions that were not reset.</li>
+    <li>Tokenizes only the current message and keeps at most 40 terms.</li>
+    <li>Joins terms with <code>OR</code>, so any matching term can qualify.</li>
+    <li>Runs FTS5 search ordered by BM25.</li>
+    <li>Converts returned ASINs to the evaluator’s recommendation format.</li>
+    <li>Returns a generic message, no clarification attribute, and zero reported tokens.</li>
+  </ol>
+  <pre>expression = " OR ".join(f'"{term}"' for term in unique_terms)
+
+SELECT parent_asin FROM products
+WHERE products MATCH ?
+ORDER BY bm25(products, 0.0, 6.0, 4.0, 2.5, 2.5, 1.5, 1.0)
+LIMIT ?</pre>
+  <p>The BM25 weights prioritize title (6.0), categories (4.0), features/details (2.5), store (1.5), and description (1.0).</p>
+
+  <h2>How the evaluator uses the agent</h2>
+  <p><code>evaluate()</code> calls <code>reset()</code>, creates an initial simulated customer message, then calls <code>respond()</code> for up to 10 turns. The evaluator checks the first 10 valid, unique catalogue IDs using exact <code>parent_asin</code> equality.</p>
+  <p>If the agent asks about an attribute, <code>customer_reply()</code> reveals a matching simulated constraint. If it does not ask, the customer returns a generic “ask me about one specific attribute” message. Intent Override scenarios send a replacement request on turn 3 or 4.</p>
+  <p>Metrics are calculated by <code>metric_summary()</code>: Hit Rate@10, MRR, and MTTC. A miss counts as turn 11 for MTTC.</p>
+
+  <h2>Current limitations</h2>
+  <ul>
+    <li>No multi-turn memory: previous requirements disappear.</li>
+    <li>No hard filtering: “under $120” is treated as text, not a numeric price condition.</li>
+    <li>No semantic understanding: related phrases such as “something warm for skiing” may not match “insulated winter jacket.”</li>
+    <li>No clarification strategy: <code>ask_attribute</code> is always <code>null</code>.</li>
+    <li>No intent override logic: “Actually, I want hiking boots” is not treated specially.</li>
+    <li>No use of the anonymized user profile.</li>
+  </ul>
+
+  <h2>Useful baseline experiment</h2>
+  <p>The smallest focused improvement is session memory: store prior messages per <code>session_id</code>, combine them with the current message, and search the cumulative query. Measure the change with the existing evaluator before adding embeddings or an LLM.</p>
+  <p class="note">Source references use the current files and line numbers in this checkout; line numbers may change after edits.</p>
+</main></body></html>
