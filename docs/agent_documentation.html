@@ -32,6 +32,67 @@
     <tr><td><a href="agent_api_contract.json">agent_api_contract.json</a></td><td>Required reset and response schemas.</td></tr>
   </table>
 
+  <h2>Customer behavior control flow</h2>
+  <p>The evaluator, not the agent, controls the simulated customer. This diagram follows the loop inside <code>evaluate()</code>.</p>
+  <div class="flow" role="img" aria-label="Customer behavior control flow diagram">
+    <pre>Start session
+    |
+    v
+materialize_hidden_fields()
+    |
+    +--> target product --> intent_card() --> hard and soft constraints
+    |
+    v
+initial_message()
+    |
+    v
+agent.respond(...)
+    |
+    +--> target found? -- yes --> score rank and turn; end session
+    |
+    no
+    |
+    +--> turn 3 or 4 and intent override? -- yes --> send replacement request
+    |                                               (old intent is replaced)
+    no                                              |
+    |                                               v
+    +--> customer_reply() <-------------------- next agent turn
+             |
+             +--> ask_attribute is null
+             |       -> generic request to ask one attribute
+             |
+             +--> Boundary and first attribute question
+             |       -> "I don't have a preference..."
+             |
+             +--> otherwise
+                     -> classify_constraint()
+                     -> reveal first undisclosed matching constraint
+                     -> add it to disclosed
+    |
+    v
+continue until hit or turn 10
+    (a miss is counted as turn 11)</pre>
+  </div>
+
+  <h2>Variable and method legend</h2>
+  <table>
+    <tr><th>Name</th><th>Plain-language meaning</th><th>Where used</th></tr>
+    <tr><td><code>sample</code></td><td>One public evaluation session, including its scenario, profile, and target ASIN.</td><td><code>evaluate()</code></td></tr>
+    <tr><td><code>scenario_type</code></td><td>The session kind: <code>buying</code>, <code>browsing</code>, <code>intent_override</code>, or <code>boundary</code>.</td><td><code>initial_message()</code>, <code>customer_reply()</code></td></tr>
+    <tr><td><code>ground_truth</code></td><td>The hidden correct product. Its <code>parent_asin</code> is the exact ID being scored.</td><td><code>materialize_hidden_fields()</code>, <code>evaluate()</code></td></tr>
+    <tr><td><code>products</code></td><td>Dictionary mapping each ASIN to its complete catalogue product record.</td><td><code>catalog_index()</code>, <code>materialize_hidden_fields()</code></td></tr>
+    <tr><td><code>intent_card</code></td><td>A compact simulated description of what the customer wants, derived from target metadata.</td><td><code>intent_card()</code>, <code>materialize_hidden_fields()</code></td></tr>
+    <tr><td><code>hard_constraints</code></td><td>Requirements the recommendation should satisfy, such as a detected material or other target requirement.</td><td><code>intent_card()</code>, <code>customer_reply()</code></td></tr>
+    <tr><td><code>soft_preferences</code></td><td>Additional desirable characteristics, but conceptually less strict than hard constraints.</td><td><code>intent_card()</code>, <code>customer_reply()</code></td></tr>
+    <tr><td><code>disclosed</code></td><td>A set of constraint strings already revealed to the agent. It prevents repeated replies.</td><td><code>initial_message()</code>, <code>customer_reply()</code></td></tr>
+    <tr><td><code>ask_attribute</code></td><td>The structured attribute the agent asks about. The simulator uses this field, not the natural-language message, to choose a reply.</td><td><code>respond()</code>, <code>customer_reply()</code></td></tr>
+    <tr><td><code>boundary_used</code></td><td>Boolean flag recording whether the special no-preference Boundary reply has already been used.</td><td><code>evaluate()</code>, <code>customer_reply()</code></td></tr>
+    <tr><td><code>override_applied</code></td><td>Boolean flag indicating that the Intent Override replacement request has been sent.</td><td><code>evaluate()</code></td></tr>
+    <tr><td><code>classify_constraint()</code></td><td>Heuristic classifier that maps text to an attribute such as <code>budget</code>, <code>color</code>, or <code>use_case</code> by checking keywords.</td><td><code>customer_reply()</code></td></tr>
+    <tr><td><code>materialize_hidden_fields()</code></td><td>Loads intent data if present; otherwise derives it from the target product and creates deterministic scenario behavior.</td><td><code>evaluate()</code></td></tr>
+    <tr><td><code>customer_reply()</code></td><td>Deterministic reply policy that examines the agent’s requested attribute and reveals a matching undisclosed constraint.</td><td><code>evaluate()</code></td></tr>
+  </table>
+
   <h2>Methods in <code>starter/agent.py</code></h2>
   <h3><code>_text(value)</code> — lines 17–24</h3>
   <p>Converts catalogue fields into searchable strings. Dictionaries become <code>key value</code> pairs, lists become space-separated text, and missing values become an empty string.</p>
