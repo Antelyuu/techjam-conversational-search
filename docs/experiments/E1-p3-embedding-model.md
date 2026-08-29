@@ -39,9 +39,21 @@ scenario_metrics:
     intent_override: {n: 30, hit_rate_at_10: 0.100,    mrr: 0.075000, mttc: 10.300}
     boundary:        {n: 10, hit_rate_at_10: 0.200,    mrr: 0.045000, mttc: 9.000}
 performance:
-  startup_seconds: null       # T1's numbers were measured by the pre-fix benchmark
-  per_turn_latency_ms: null   # and the corrected benchmark was never re-run
-  peak_memory_mb: null
+  benchmark_sample_texts: 200
+  benchmark_environment: "local macOS, Python 3.14, CPU"
+  selected_model:
+    startup_seconds: 5.733
+    per_turn_query_latency_ms: 8.079
+    peak_memory_mb: 456.6
+    batch_encode_seconds: 1.298
+    texts_per_second: 154.07
+  bge_comparison:
+    startup_seconds: 5.648
+    per_turn_query_latency_ms: 8.097
+    peak_memory_mb: 602.0
+    batch_encode_seconds: 2.670
+    texts_per_second: 74.92
+  note: "Measured by scripts/embedding_model_benchmark.py on 200 catalogue texts; peak RSS includes the Python/model process and values are hardware/environment dependent."
 model_api: {model: "sentence-transformers/all-MiniLM-L6-v2", network_required: false, prompt_tokens: 0, completion_tokens: 0}
 newly_won_sessions: []
 newly_lost_sessions: []

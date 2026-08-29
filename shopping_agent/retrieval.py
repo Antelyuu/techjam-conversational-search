@@ -113,8 +113,13 @@ def retrieve(
     route_scores: dict[str, dict[str, float]] = {}
     for route_name, hits in routes.items():
         for rank, (parent_asin, score) in enumerate(hits, start=1):
-            route_ranks.setdefault(parent_asin, {})[route_name] = rank
-            route_scores.setdefault(parent_asin, {})[route_name] = score
+            candidate_ranks = route_ranks.setdefault(parent_asin, {})
+            candidate_scores = route_scores.setdefault(parent_asin, {})
+            # A route should be ranked by its first occurrence. Duplicate
+            # hits must not overwrite the better rank/score already recorded.
+            if route_name not in candidate_ranks:
+                candidate_ranks[route_name] = rank
+                candidate_scores[route_name] = score
 
     retained: list[str] = []
     outcomes = {}

@@ -142,7 +142,7 @@ def load_dense_retriever(
     """
     try:
         return DenseRetriever(embedding_dir, model_id, query_prefix, expected_ids).search
-    except DenseRouteUnavailable as error:
+    except Exception as error:
         if strict:
             raise
         print(
