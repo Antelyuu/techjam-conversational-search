@@ -13,9 +13,11 @@ from .filtering import evaluate_candidate, matched_constraints
 LexicalSearchFn = Callable[[str, int], list[tuple[str, float]]]
 
 # How much larger a pool to pull than top_k, so the hard price filter has
-# room to drop over-budget items without starving the final list.
+# room to drop over-budget items without starving the final list. The cap
+# accommodates RERANK_POOL (starter/agent.py), which widens the fetch through
+# candidate_limit; it exists so no caller can request an unbounded scan.
 POOL_MULTIPLIER = 5
-MAX_POOL_SIZE = 200
+MAX_POOL_SIZE = 250
 
 FUSION_RRF = "rrf"
 FUSION_WEIGHTED = "weighted"

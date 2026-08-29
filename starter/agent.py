@@ -31,20 +31,22 @@ _DEFAULT_QUESTION = "Could you tell me a little more about what you need?"
 # How deep a pool the reranker reorders before the top ten are shown. This
 # also widens the BM25 fetch to match (see retrieve()).
 #
-# MEASURED twice, with opposite results, and the difference is the evidence
-# feature. E5 swept 100-800 at MIN_EVIDENCE_TOKENS=3 and found HitRate flat
-# at every depth: a rescued deep candidate could not be told apart, so depth
-# bought nothing. E6's floor removal changed that -- 16 of the 26 remaining
-# misses were targets that never entered the 50-candidate pool while evidence
-# could now rank them if only they arrived. Re-swept (E7):
+# MEASURED three times, with different results each time, and the difference
+# is what the reranker can discriminate. E5 swept 100-800 at
+# MIN_EVIDENCE_TOKENS=3 and found HitRate flat at every depth: a rescued deep
+# candidate could not be told apart, so depth bought nothing. E6's floor
+# removal turned depth into a smooth rise peaking at 100 (0.766930) -- 16 of
+# the 26 remaining misses were targets that never entered the 50-candidate
+# pool while evidence could now rank them. E7's phrase-containment feature
+# moved the optimum again, because contiguity keeps discriminating where
+# token coverage saturates:
 #
-#   depth   50        75        100       150       200       400       800
-#   score   0.753328  0.760814  0.766930  0.766610  0.763124  0.764761  0.764661
+#   depth   100       150       200       250       300       350       400       600       800
+#   score   0.798916  0.807179  0.807791  0.810660  0.810445  0.807321  0.804144  0.800169  0.799931
 #
-# A smooth rise to a peak at 100, then a mild decline as deeper pools admit
-# more high-coverage impostors. 100 is the peak and also the cheapest point
-# past the rise.
-RERANK_POOL = 100
+# 250 and 300 tie at the HitRate top (0.940); 250 is the earlier, cheaper
+# point of that plateau.
+RERANK_POOL = 250
 
 # P5-T1: the dense route is off by default, reversing P3's decision on
 # measurement rather than on preference.
