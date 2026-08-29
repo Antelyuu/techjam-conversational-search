@@ -46,6 +46,31 @@ The command writes per-session results and aggregate metrics to `results.json`.
 The included weak BM25 starter scores Hit Rate@10 `0.125`, MRR `0.068034`, and
 MTTC `9.81` on the released public set. See `docs/baseline_results.json`.
 
+## Optional Dense Semantic Route
+
+The agent runs lexical-only by default and needs no dependencies beyond the
+standard library. The optional dense route adds semantic matching for
+paraphrases and scenario-style messages, fused with the lexical route.
+
+```bash
+pip install -r requirements.txt      # sentence-transformers (pulls in torch, numpy)
+python3 -m scripts.build_embeddings  # one-time; writes data/embeddings/
+SHOPPING_AGENT_DENSE=1 python3 -m evaluator.local_evaluator
+```
+
+Set `SHOPPING_AGENT_FUSION=rrf` (default) or `weighted` to pick how the two
+routes are blended. The model itself is set in
+`shopping_agent/embedding_config.py`.
+
+**Network access:** only `pip install` and the first `build_embeddings` run need
+the network, to download dependencies and model weights. Retrieval never
+reaches the network — once the artifact is built, the dense route runs fully
+offline.
+
+**Offline fallback:** if the embedding artifact or the dependencies are missing,
+the dense route silently does not engage and the agent serves lexical-only
+results. It never fails because the dense route is unavailable.
+
 ## Agent Interface
 
 ```python
