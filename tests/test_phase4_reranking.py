@@ -2,6 +2,7 @@ import unittest
 
 from shopping_agent.catalog import normalize_product
 from shopping_agent.contracts import Candidate, Constraint
+from shopping_agent.filtering import matched_constraints
 from shopping_agent.reranking import FEATURE_WEIGHTS, rerank, score_candidate
 
 
@@ -156,6 +157,43 @@ class CategoryNeutralityTest(unittest.TestCase):
     def test_an_unmatched_category_is_still_distinguishable_from_a_match(self):
         constraints = {"category": Constraint("category", "shoes", "hard", 1)}
         self.assertEqual(self.category_of(constraints), 1.0)
+
+
+class CategoryIsNotDoubleCountedTest(unittest.TestCase):
+    """Regression: category is the only DEFAULT_HARD_ATTRIBUTE, and
+    matched_constraints() used to report it alongside the dedicated category
+    feature. A title containing the category word then scored a full
+    hard_constraints share *and* a full category feature -- up to 1.5 of the
+    reranker's scale where FEATURE_WEIGHTS intends 0.5."""
+
+    def values(self, constraints):
+        hard, soft = matched_constraints(product("x"), constraints)
+        scored = score_candidate(
+            candidate("x", lexical=1, hard=hard, soft=soft), product("x"), constraints
+        )
+        return {c.feature: c.value for c in scored.contributions}
+
+    def test_category_is_not_reported_as_a_matched_hard_constraint(self):
+        constraints = {"category": Constraint("category", "shoes", "hard", 1)}
+        hard, _soft = matched_constraints(product("x"), constraints)
+        self.assertNotIn("category", hard)
+
+    def test_a_category_only_session_scores_category_once(self):
+        constraints = {"category": Constraint("category", "shoes", "hard", 1)}
+        values = self.values(constraints)
+        self.assertEqual(values["category"], 1.0)
+        # Neutral, not a free win: there is no other hard constraint to satisfy.
+        self.assertEqual(values["hard_constraints"], 0.0)
+
+    def test_the_denominator_drops_category_with_the_numerator(self):
+        """A candidate matching every *scorable* hard constraint must score a
+        full share. Excluding category from the numerator alone would leave it
+        in the denominator and report 1/2."""
+        constraints = {
+            "category": Constraint("category", "shoes", "hard", 1),
+            "color": Constraint("color", "running", "hard", 1),
+        }
+        self.assertEqual(self.values(constraints)["hard_constraints"], 1.0)
 
 
 class RerankTest(unittest.TestCase):

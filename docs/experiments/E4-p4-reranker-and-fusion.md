@@ -162,6 +162,58 @@ and changed the query text every configuration sees. `adopted` and `both` are
 the same configuration and reproduce each other exactly, which is the internal
 check that the sweep harness is switching what it claims to switch.
 
+## Correction: the category feature was double-counted, and is worth zero
+
+Found in the pre-merge code review of this branch, after the figures above
+were recorded. It changes the adopted weights, so it is written here rather
+than in a new record.
+
+`category` is the only `DEFAULT_HARD_ATTRIBUTE`, and
+`filtering.matched_constraints()` excluded only `budget` from its containment
+check. So in any session whose one hard constraint is the category -- the
+common case -- a candidate whose text contained the category word scored a
+**full `hard_constraints` share (weight 1.0) *and* a full `category` feature
+(weight 0.5)**. Category's effective weight was ~1.5 against a stated 0.5, and
+every other weight in the table was tuned against that inflated value.
+
+`SCORED_SEPARATELY` now holds both `budget` and `category`, and `_share()`
+excludes the same set from its denominator that `matched_constraints()`
+excludes from its numerator.
+
+Re-sweeping the category weight alone, everything else at the settings above:
+
+| category weight | HitRate@10 | MRR | TechnicalScore |
+|---|---|---|---|
+| **0.0** | **0.7550** | **0.471877** | **0.636663** |
+| 0.5 | 0.7500 | 0.466940 | 0.631982 |
+| 1.0 | 0.7550 | 0.463663 | 0.633899 |
+| 1.5 | 0.7550 | 0.457171 | 0.631651 |
+| 2.0 | 0.7400 | 0.455060 | 0.621418 |
+| 3.0 | 0.7400 | 0.439607 | 0.616982 |
+
+**MRR falls monotonically as category gains weight**, across six points, and
+the composite is highest at zero. That is a structural result rather than a
+tuning accident: retrieval already applies `score_category()` as a boost when
+it builds the pool (`FUSED_BOOST_SCALE`), so the reranker's category feature
+re-applies a signal the ordering it is reordering has already accounted for.
+The *original* double-count was therefore the same mistake twice over.
+
+**Adopted: `category` weight 0.0**, kept in `FEATURE_WEIGHTS` so the
+contribution still appears in `explain()`. Confirmed end to end with no
+environment variables:
+
+```
+hit_rate_at_10 0.755   mrr 0.471877   mttc 5.120   technical_score 0.636663
+boundary 0.900 / 5.000    browsing 0.7625 / 5.000
+buying   0.7125 / 4.8875  intent_override 0.800 / 6.100
+```
+
+Against the branch as reviewed (0.634293) this is **+0.002370**, and against
+the fix alone at the old 0.5 weight (0.631982) it is +0.004681. Note the
+figures earlier in this record predate the branch's last two commits, which is
+why the "confirmed end to end" block above reads 0.633245 and the branch
+measured 0.634293 before this change.
+
 ## P4-T5, the optional model reranker
 
 **Not attempted, deliberately.** T5 is marked optional and asks for a local

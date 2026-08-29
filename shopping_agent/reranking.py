@@ -33,7 +33,7 @@ from dataclasses import dataclass
 
 from .catalog import ProductRecord
 from .contracts import Candidate, Constraint
-from .filtering import evaluate_price, score_category
+from .filtering import SCORED_SEPARATELY, evaluate_price, score_category
 
 # MEASURED, and not what the checklist order suggests. Weighting the features
 # in P4's stated priority order -- hard_constraints 4.0 down to
@@ -48,9 +48,30 @@ from .filtering import evaluate_price, score_category
 # constraints outrank category, which outranks metadata, which outranks soft
 # preferences -- but retrieval rank outranks all of them, which the specified
 # order does not say and the measurement does.
+#
+# MEASURED again after the category double-count was removed. That bug --
+# matched_constraints() reporting `category` alongside the dedicated category
+# feature -- had made category's effective weight ~1.5 rather than the stated
+# 0.5, so E4 tuned every other weight against an inflated value. Re-sweeping
+# category alone, with the rest held at E4's settings:
+#
+#   weight   0.0      0.5      1.0      1.5      2.0      3.0
+#   MRR      0.4719   0.4669   0.4637   0.4572   0.4551   0.4396
+#   score    0.6367   0.6320   0.6339   0.6317   0.6214   0.6170
+#
+# MRR falls monotonically as category gains weight, and the composite is
+# highest at zero. The reason is structural rather than a tuning accident:
+# retrieval already applies score_category() as a boost when it builds the
+# pool (FUSED_BOOST_SCALE in retrieval.py), so the reranker's copy re-applies
+# a signal the ranking it is reordering has *already* accounted for.
+#
+# Kept in the table at 0.0 rather than deleted, so the contribution still
+# appears in explain() and the checklist stays six features long -- P4-T1's
+# acceptance is that every feature is inspectable, and "measured to be worth
+# nothing here" is a more useful thing to be able to read off than silence.
 FEATURE_WEIGHTS: dict[str, float] = {
     "hard_constraints": 1.0,
-    "category": 0.5,
+    "category": 0.0,
     "lexical_rank": 2.0,
     "dense_rank": 2.0,
     "metadata": 0.25,
@@ -135,9 +156,14 @@ def _budget_value(product: ProductRecord, budget: Constraint | None) -> float:
 
 def _share(matched: tuple[str, ...], constraints: dict[str, Constraint], strength: str) -> float:
     """Share of the constraints of this strength that the candidate matches.
-    No constraints of that strength is neutral (0.0), not a free win."""
+    No constraints of that strength is neutral (0.0), not a free win.
+
+    The denominator must exclude exactly what matched_constraints() excludes
+    from the numerator; counting a separately-scored attribute here only
+    would make a full match look partial."""
     total = sum(
-        1 for a, c in constraints.items() if c.strength == strength and a != "budget"
+        1 for a, c in constraints.items()
+        if c.strength == strength and a not in SCORED_SEPARATELY
     )
     if total == 0:
         return 0.0

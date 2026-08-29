@@ -34,9 +34,16 @@ _LEAD_IN_RE = re.compile(r"^[^:]{0,120}:\s*")
 # A reversal stated up front, which is what actually displaces the answer to
 # our question -- as opposed to the word "instead" appearing somewhere inside
 # a product description the customer has just quoted at us.
+#
+# Both alternatives are anchored. The second was not, which contradicted the
+# rule above: "ignore the previous ..." occurring anywhere in a disclosure --
+# and disclosures are raw product copy quoted back at us -- would discard an
+# answer we had actually received and re-ask a question already spent.
 _ANSWER_REPLACED_RE = re.compile(
-    r"^\s*(?:actually|never\s*mind|nevermind|scratch that)\b"
-    r"|\bignore (?:my|that|the) (?:earlier|previous|last)\b",
+    r"^\s*(?:"
+    r"(?:actually|never\s*mind|nevermind|scratch that)\b"
+    r"|ignore (?:my|that|the) (?:earlier|previous|last)\b"
+    r")",
     re.IGNORECASE,
 )
 

@@ -56,6 +56,32 @@ class Phase1StateTest(unittest.TestCase):
         self.assertEqual(state.constraints["category"].value, "necklace")
         self.assertNotIn("use_case", state.constraints)
 
+    def test_a_cleared_slot_becomes_askable_again(self):
+        """Regression: the value was discarded but the attribute stayed in
+        asked_attributes, so choose_attribute() kept it blocked forever. The
+        turn was then lost twice -- once for the answer, once for the question
+        that could have replaced it."""
+        state = SessionState(session_id="demo", user_profile={})
+        apply_candidates(state, extract_candidate_slots("I need running shoes"), 1)
+        state.asked_attributes.add("use_case")
+
+        apply_candidates(state, extract_candidate_slots("Actually, I want a necklace"), 2)
+
+        self.assertNotIn("use_case", state.constraints)
+        self.assertNotIn("use_case", state.asked_attributes)
+
+    def test_a_rejection_survives_a_category_change(self):
+        """A rejection says the customer has no such preference at all, which
+        is a fact about them and not about the category they are asking
+        after. Re-asking it would spend a turn on a known-empty answer."""
+        state = SessionState(session_id="demo", user_profile={})
+        apply_candidates(state, extract_candidate_slots("I need running shoes"), 1)
+        state.rejected_attributes.add("use_case")
+
+        apply_candidates(state, extract_candidate_slots("Actually, I want a necklace"), 2)
+
+        self.assertIn("use_case", state.rejected_attributes)
+
     def test_common_slots_are_extracted(self):
         candidates = dict(
             (attribute, (value, strength))

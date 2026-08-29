@@ -51,6 +51,18 @@ def apply_candidates(state: SessionState, candidates: list[Candidate], turn: int
             for attribute in list(state.constraints):
                 if attribute in CATEGORY_DEPENDENT_ATTRIBUTES and attribute not in supplied_this_turn:
                     del state.constraints[attribute]
+                    # The answer we held for this slot has just been thrown
+                    # away, so the slot is open again and the question that
+                    # filled it is worth re-asking. Without this the state is
+                    # inconsistent: the value is gone from the query but the
+                    # attribute stays blocked in choose_attribute(), so the
+                    # turn is lost twice over.
+                    #
+                    # rejected_attributes is deliberately *not* cleared. A
+                    # rejection means the customer has no such preference at
+                    # all, which is a fact about them rather than about the
+                    # category they are currently asking after.
+                    state.asked_attributes.discard(attribute)
 
     for attribute, value, strength in candidates:
         state.constraints[attribute] = Constraint(

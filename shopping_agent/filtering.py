@@ -11,6 +11,20 @@ from .contracts import Constraint
 # a category match.
 BROAD_CATEGORY_TERMS = {"clothing", "clothing, shoes & jewelry", "clothing shoes & jewelry"}
 
+# Attributes that already have a dedicated scoring feature and must not also
+# be counted through generic text containment.
+#
+# `budget` is numeric -- evaluate_price() decides it, and its value ("100")
+# would never appear as a word in product text anyway.
+#
+# `category` is scored by score_category(), which knows about the umbrella
+# term and about mismatch. Leaving it in here double-counted it: category is
+# the only DEFAULT_HARD_ATTRIBUTE, so in the common session whose one hard
+# constraint is the category, a title containing the category word scored a
+# full hard_constraints share *and* a full category feature -- up to 1.5 of
+# the reranker's scale where the weights intend 0.5.
+SCORED_SEPARATELY = frozenset({"budget", "category"})
+
 
 def _contains_word(text: str, value: str) -> bool:
     """Word-boundary containment check, so "bag" does not match inside
@@ -98,12 +112,15 @@ def evaluate_candidate(product: ProductRecord, constraints: dict[str, Constraint
 def matched_constraints(product: ProductRecord, constraints: dict[str, Constraint]) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Lexical-only match check: does the constraint's value text appear
     in the product's searchable text? Used to report which hard/soft
-    constraints a candidate actually satisfies, not to filter."""
+    constraints a candidate actually satisfies, not to filter.
+
+    Attributes in SCORED_SEPARATELY are skipped: they carry their own
+    feature downstream and counting them here as well scores them twice."""
     text = product.searchable_text.lower()
     hard: list[str] = []
     soft: list[str] = []
     for attribute, constraint in constraints.items():
-        if attribute == "budget":
+        if attribute in SCORED_SEPARATELY:
             continue
         target = (hard if constraint.strength == "hard" else soft)
         if _contains_word(text, str(constraint.value).lower()):

@@ -196,6 +196,37 @@ class LeadInStrippingTest(unittest.TestCase):
         self.assertEqual(self.absorb("I'm looking for boots, but I'm still exploring.", asked=None), [])
 
 
+class AnswerReplacedTest(unittest.TestCase):
+    """Only a reversal stated up front displaces the answer to our question.
+    detect_override_cue() is deliberately broad -- it fires on "instead" or
+    "no longer" anywhere in the text -- and disclosures are raw product copy,
+    so the anchor is what stops an answered question being re-asked."""
+
+    def asked_after(self, message):
+        state = SessionState("demo", {})
+        state.pending_attribute = "feature"
+        state.asked_attributes.add("feature")
+        ConversationOrchestrator._absorb_answer(state, message, True)
+        return state.asked_attributes
+
+    def test_a_leading_reversal_reopens_the_question(self):
+        self.assertNotIn("feature", self.asked_after("Actually, I want boots instead."))
+
+    def test_a_leading_ignore_reopens_the_question(self):
+        self.assertNotIn(
+            "feature", self.asked_after("Ignore my previous request; I want boots instead.")
+        )
+
+    def test_the_phrase_buried_in_a_disclosure_does_not(self):
+        """Regression: the "ignore ..." alternative was unanchored, so this
+        product copy discarded an answer we had actually received."""
+        message = (
+            "For that, what matters is: wipe clean with a damp cloth; "
+            "ignore the previous packaging note, it no longer applies."
+        )
+        self.assertIn("feature", self.asked_after(message))
+
+
 class InterpretReplyTest(unittest.TestCase):
     def test_an_empty_answer_rejects_the_attribute(self):
         rejected, boundary = interpret_reply("I don't have an additional preference for color.")
