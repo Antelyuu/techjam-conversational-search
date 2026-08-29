@@ -7,7 +7,6 @@ data/catalog.jsonl
 data/releases/
 # Generated embedding artifacts (large binaries); rebuild with
 # `python3 -m scripts.build_embeddings` rather than committing them.
-data/embeddings/
 # Organizer-only code, private evaluation data, manifests, and build reports.
 organizer/
 secure/
