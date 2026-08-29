@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -13,6 +12,7 @@ from shopping_agent.dense_retrieval import load_dense_retriever
 from shopping_agent.orchestrator import ConversationOrchestrator
 from shopping_agent.reranking import rerank
 from shopping_agent.retrieval import DEFAULT_FUSION, FUSION_METHODS, retrieve
+from shopping_agent.text import tokenize
 
 
 # The evaluator matches on ask_attribute alone and never reads these, but a
@@ -55,8 +55,6 @@ RERANK_POOL = 50
 # private set that asks fewer questions would move the balance back.
 DENSE_BY_DEFAULT = False
 
-TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
-
 # How many distinct query terms reach BM25.
 #
 # This looked like a silent-truncation bug of the kind P4 found twice, and it
@@ -73,6 +71,10 @@ QUERY_TERM_LIMIT = 40
 # parent_asin, title, categories, features, details, store, description.
 # parent_asin is unindexed and always 0.0.
 FIELD_WEIGHTS = "0.0, 6.0, 4.0, 2.5, 2.5, 1.5, 1.0"
+# Conversational filler, stripped from BM25 queries. Deliberately not the
+# same set evidence.py strips from product copy -- "please" and "looking" are
+# noise here and content there never arises, while "your" and "will" are the
+# reverse. The token definition itself is shared (shopping_agent/text.py).
 STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from",
     "i", "in", "is", "it", "me", "my", "of", "on", "or", "please", "some",
@@ -81,11 +83,7 @@ STOPWORDS = {
 
 
 def _terms(text: str) -> list[str]:
-    return [
-        token.lower()
-        for token in TOKEN_RE.findall(text)
-        if len(token) > 1 and token.lower() not in STOPWORDS
-    ]
+    return tokenize(text, STOPWORDS)
 
 
 def _resolve_fusion(value: str | None) -> str:

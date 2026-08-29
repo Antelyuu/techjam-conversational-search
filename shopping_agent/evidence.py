@@ -25,11 +25,8 @@ feature exists to close that gap.
 
 from __future__ import annotations
 
-import re
-
 from .catalog import ProductRecord
-
-_TOKEN_RE = re.compile(r"[a-z0-9]+")
+from .text import tokenize
 
 # Words that carry no evidence: they appear in most product copy, so counting
 # them inflates coverage for candidates that match nothing specific.
@@ -39,11 +36,20 @@ _STOPWORDS = frozenset({
     "will", "can", "has", "have", "not", "all", "any", "each", "our", "we",
 })
 
-# A disclosure this short is a label rather than a sentence -- "color: black",
-# "cotton". Those match a large share of the catalogue, so counting them as
-# evidence rewards the wrong candidates. They are already handled as slots by
-# intent extraction and as terms by BM25.
-MIN_EVIDENCE_TOKENS = 3
+# Every disclosure with at least one content token counts.
+#
+# This was 3, on the reasoning that a bare label -- "cotton", "color: black" --
+# matches too much of the catalogue to discriminate and would reward the wrong
+# candidates. MEASURED (E6): that reasoning was wrong, and expensively so.
+# The Buying opener discloses the card's first constraint, which is usually
+# exactly such a label, and discarding it silenced the table's dominant
+# feature for the whole session in the sessions with the least other text.
+# Counting short labels, down-weighted by their own token count so they can
+# never outvote a quoted sentence, is worth +4.0 points of HitRate and
+# +0.043 composite. It also closes the review finding that semicolons inside
+# a single quoted constraint ("... inches; 7.8 Ounces") split off fragments
+# that a 3-token floor then discarded.
+MIN_EVIDENCE_TOKENS = 1
 
 # Cache of product token sets, keyed by the text itself.
 #
@@ -55,20 +61,25 @@ MIN_EVIDENCE_TOKENS = 3
 # tests are -- would then serve each other's tokens. Hashing the string is
 # cheap because ProductRecord is frozen, so the same str object is reused and
 # Python caches its hash after the first lookup.
+#
+# Bounded so a long-lived process cannot accrete a tokenized copy of every
+# catalogue it ever loads: past the limit the cache is dropped wholesale and
+# rebuilt from the pool traffic that actually recurs. One 50k catalogue fits
+# with room to spare, so the submission never trips this.
 _TOKEN_CACHE: dict[str, frozenset[str]] = {}
+_TOKEN_CACHE_LIMIT = 120_000
 
 
 def _content_tokens(text: str) -> list[str]:
-    return [
-        token for token in _TOKEN_RE.findall(text.lower())
-        if len(token) > 1 and token not in _STOPWORDS
-    ]
+    return tokenize(text, _STOPWORDS)
 
 
 def product_tokens(product: ProductRecord) -> frozenset[str]:
     text = product.searchable_text
     cached = _TOKEN_CACHE.get(text)
     if cached is None:
+        if len(_TOKEN_CACHE) >= _TOKEN_CACHE_LIMIT:
+            _TOKEN_CACHE.clear()
         cached = frozenset(_content_tokens(text))
         _TOKEN_CACHE[text] = cached
     return cached
@@ -79,32 +90,52 @@ def split_disclosures(message: str) -> list[str]:
 
     The simulator joins them with "; " (`customer_reply`), and each is a
     separate quoted sentence from the target. Scored as one blob they would
-    average together; scored apart, covering either one is evidence."""
+    average together; scored apart, covering either one is evidence.
+
+    A semicolon *inside* one quoted constraint (22% of catalogue rows produce
+    one) is indistinguishable from the joiner, so such a constraint arrives
+    fragmented. That is tolerated rather than special-cased: coverage()
+    weights each piece by its own token count, so the fragments together score
+    within dedup noise of the whole."""
     return [part.strip() for part in message.split(";") if part.strip()]
 
 
-def coverage(product: ProductRecord, disclosures: list[str]) -> float:
-    """How completely this candidate's text accounts for what was disclosed.
+def disclosure_token_sets(disclosures: list[str]) -> list[frozenset[str]]:
+    """Tokenize disclosures once, for scoring against many candidates.
+
+    Reranking scores a fifty-candidate pool against the same disclosures every
+    turn; tokenizing per candidate did that work fifty times over (review
+    finding, P5)."""
+    sets = []
+    for disclosure in disclosures:
+        wanted = frozenset(_content_tokens(disclosure))
+        if len(wanted) >= MIN_EVIDENCE_TOKENS:
+            sets.append(wanted)
+    return sets
+
+
+def coverage_from_sets(tokens: frozenset[str], wanted_sets: list[frozenset[str]]) -> float:
+    """How completely a token set accounts for the disclosed constraints.
 
     Each disclosure contributes the share of its content tokens the candidate
-    carries, and disclosures are weighted by their own length -- a fourteen
-    word feature sentence is far stronger evidence than a three word one, and
-    averaging them flat would let a trivial match outvote a specific one.
+    carries, weighted by its own length -- a fourteen word feature sentence is
+    far stronger evidence than a one word label, and averaging them flat would
+    let a trivial match outvote a specific one.
 
     Returns 0-1. No usable disclosure yet is 0.0, the same neutral value as a
     candidate that matches nothing, because at that point the feature has
     nothing to say and must not reorder anything.
     """
-    matched = 0.0
-    total = 0.0
-    tokens = product_tokens(product)
-    for disclosure in disclosures:
-        wanted = set(_content_tokens(disclosure))
-        if len(wanted) < MIN_EVIDENCE_TOKENS:
-            continue
-        weight = float(len(wanted))
-        matched += weight * (len(wanted & tokens) / len(wanted))
-        total += weight
-    if total == 0.0:
+    matched = 0
+    total = 0
+    for wanted in wanted_sets:
+        matched += len(wanted & tokens)
+        total += len(wanted)
+    if total == 0:
         return 0.0
     return matched / total
+
+
+def coverage(product: ProductRecord, disclosures: list[str]) -> float:
+    """How completely this candidate's text accounts for what was disclosed."""
+    return coverage_from_sets(product_tokens(product), disclosure_token_sets(disclosures))

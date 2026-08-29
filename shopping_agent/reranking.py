@@ -193,12 +193,18 @@ def score_candidate(
     product: ProductRecord,
     constraints: dict[str, Constraint],
     disclosures: list[str] | None = None,
+    *,
+    disclosure_tokens: list[frozenset[str]] | None = None,
 ) -> RerankedCandidate:
     """Score one candidate against the feature checklist, in order.
 
     `disclosures` are the constraint sentences the customer has quoted back
     in answer to our questions. Omitted, the evidence feature scores 0 for
-    every candidate and cannot reorder anything."""
+    every candidate and cannot reorder anything. rerank() tokenizes them once
+    for the whole pool and passes `disclosure_tokens` instead; a direct caller
+    can hand over the raw strings and pay one tokenization."""
+    if disclosure_tokens is None:
+        disclosure_tokens = evidence.disclosure_token_sets(disclosures or [])
     category = constraints.get("category")
     if category is None:
         # A constraint the customer never gave earns no credit. Constant
@@ -221,7 +227,9 @@ def score_candidate(
         "dense_rank": _rank_value(candidate, "dense"),
         "metadata": metadata_value,
         "soft_preferences": _share(candidate.matched_soft_preferences, constraints, "soft"),
-        "constraint_evidence": evidence.coverage(product, disclosures or []),
+        "constraint_evidence": evidence.coverage_from_sets(
+            evidence.product_tokens(product), disclosure_tokens
+        ),
     }
 
     contributions = tuple(
@@ -248,8 +256,14 @@ def rerank(
     separate keep the order retrieval gave them rather than being permuted
     arbitrarily.
     """
+    disclosure_tokens = evidence.disclosure_token_sets(disclosures or [])
     scored = [
-        score_candidate(candidate, products[candidate.parent_asin], constraints, disclosures)
+        score_candidate(
+            candidate,
+            products[candidate.parent_asin],
+            constraints,
+            disclosure_tokens=disclosure_tokens,
+        )
         for candidate in candidates
         if candidate.parent_asin in products
     ]

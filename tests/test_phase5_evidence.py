@@ -57,13 +57,17 @@ class CoverageTest(unittest.TestCase):
         self.assertGreater(value, 0.0)
         self.assertLess(value, 1.0)
 
-    def test_a_label_too_short_to_discriminate_is_ignored(self):
-        """"color: black" matches a large share of any catalogue. Counting it
-        as evidence rewards the wrong candidates; slots and BM25 already have
-        it."""
-        short = "cotton canvas"
-        self.assertLess(len(short.split()), MIN_EVIDENCE_TOKENS)
-        self.assertEqual(coverage(product("a"), [short]), 0.0)
+    def test_a_short_label_counts_as_evidence(self):
+        """The Buying opener discloses the card's first constraint, which is
+        usually a bare material or color label. Ignoring those cost 4 points
+        of HitRate (E6); they count now, down-weighted by their own length."""
+        self.assertEqual(MIN_EVIDENCE_TOKENS, 1)
+        self.assertEqual(coverage(product("a"), ["cotton canvas"]), 1.0)
+
+    def test_an_all_stopword_disclosure_is_ignored(self):
+        """No content tokens means nothing to cover -- and must not divide
+        by zero."""
+        self.assertEqual(coverage(product("a"), ["with your, and the"]), 0.0)
 
     def test_a_longer_disclosure_outweighs_a_shorter_one(self):
         """Flat averaging would let a trivial match outvote a specific one."""
