@@ -51,7 +51,16 @@ BRANDS = (
     "Guess", "Coach", "Michael Kors", "Pandora", "Fossil",
 )
 
-LETTER_SIZES = ("xxl", "xl", "small", "medium", "large", "wide", "narrow", "xs", "s", "m", "l")
+# Sizes that are words in their own right and safe to match bare.
+LETTER_SIZES = ("xxl", "xl", "xs", "small", "medium", "large", "wide", "narrow")
+
+# Single-letter sizes only count next to an explicit size cue. Matched bare
+# they are a trap: \b treats an apostrophe as a word boundary, so "s", "m" and
+# "l" match inside "it's", "I'm" and "I'll". Every evaluator session opens with
+# "I'm looking for ...", which silently set size="m" on all 200 of them --
+# polluting the query text with a junk term and, once P4 arrived, permanently
+# blocking the size question because the slot looked fixed.
+SIZE_ABBREVIATIONS = ("xs", "s", "m", "l")
 
 
 def _word_re(words: tuple[str, ...]) -> re.Pattern[str]:
@@ -68,6 +77,9 @@ MATERIAL_RE = _word_re(MATERIAL_WORDS)
 BRAND_RE = _word_re(BRANDS)
 LETTER_SIZE_RE = _word_re(LETTER_SIZES)
 NUMERIC_SIZE_RE = re.compile(r"\bsize\s*(\d+(?:\.\d+)?)\b", re.IGNORECASE)
+SIZE_ABBREVIATION_RE = re.compile(
+    r"\bsizes?\s*[:\-]?\s*(" + "|".join(SIZE_ABBREVIATIONS) + r")\b", re.IGNORECASE
+)
 
 BUDGET_CEILING_RE = re.compile(
     r"(?:under|below|less than)\s*\$?\s*(\d+(?:\.\d+)?)\s*(?:dollars)?"
@@ -154,12 +166,14 @@ def extract_candidate_slots(text: str) -> list[Candidate]:
         candidates.append(("brand", _canonical_brand(brand_match.group(0)), _strength("brand", text)))
 
     numeric_size_match = NUMERIC_SIZE_RE.search(text)
+    abbreviation_match = SIZE_ABBREVIATION_RE.search(text)
+    letter_size_match = LETTER_SIZE_RE.search(text)
     if numeric_size_match:
         candidates.append(("size", numeric_size_match.group(1), _strength("size", text)))
-    else:
-        letter_size_match = LETTER_SIZE_RE.search(text)
-        if letter_size_match:
-            candidates.append(("size", letter_size_match.group(0).lower(), _strength("size", text)))
+    elif letter_size_match:
+        candidates.append(("size", letter_size_match.group(0).lower(), _strength("size", text)))
+    elif abbreviation_match:
+        candidates.append(("size", abbreviation_match.group(1).lower(), _strength("size", text)))
 
     feature_match = FEATURE_RE.search(text)
     if feature_match:

@@ -79,5 +79,29 @@ class Phase1StateTest(unittest.TestCase):
         self.assertTrue(detect_override_cue("Actually, I want boots instead"))
 
 
+class SizeExtractionTest(unittest.TestCase):
+    """Regression: \\b treats an apostrophe as a word boundary, so bare
+    single-letter sizes matched inside contractions. Every evaluator session
+    opens with "I'm looking for ...", which set size="m" on all 200."""
+
+    def sizes(self, text):
+        return [value for attribute, value, _ in extract_candidate_slots(text) if attribute == "size"]
+
+    def test_contractions_are_not_sizes(self):
+        self.assertEqual(self.sizes("I'm looking for boots, but I'm still exploring."), [])
+        self.assertEqual(self.sizes("It's a gift and I'll need it soon"), [])
+
+    def test_single_letter_sizes_need_a_size_cue(self):
+        self.assertEqual(self.sizes("I need size M"), ["m"])
+        self.assertEqual(self.sizes("size: L please"), ["l"])
+
+    def test_word_sizes_still_match_bare(self):
+        self.assertEqual(self.sizes("a medium sweater"), ["medium"])
+        self.assertEqual(self.sizes("I'll take the wide fit"), ["wide"])
+
+    def test_numeric_sizes_still_match(self):
+        self.assertEqual(self.sizes("I need size 10"), ["10"])
+
+
 if __name__ == "__main__":
     unittest.main()
