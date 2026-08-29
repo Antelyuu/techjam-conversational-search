@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from .catalog import ProductRecord
@@ -9,6 +10,12 @@ from .contracts import Constraint
 # no discriminating signal; presence of only this value must not count as
 # a category match.
 BROAD_CATEGORY_TERMS = {"clothing", "clothing, shoes & jewelry", "clothing shoes & jewelry"}
+
+
+def _contains_word(text: str, value: str) -> bool:
+    """Word-boundary containment check, so "bag" does not match inside
+    "Baggy" and "tan" does not match inside "instant"."""
+    return re.search(r"\b" + re.escape(value) + r"\b", text, re.IGNORECASE) is not None
 
 CATEGORY_MATCH_BOOST = 2.0
 CATEGORY_MISMATCH_PENALTY = -0.5
@@ -46,7 +53,7 @@ def score_category(product: ProductRecord, requested_category: str | None) -> tu
     if requested_category is None:
         return 0.0, "no_category_constraint"
     specific_categories = [c for c in product.categories if c not in BROAD_CATEGORY_TERMS]
-    if requested_category in specific_categories or requested_category in product.title.lower():
+    if requested_category in specific_categories or _contains_word(product.title.lower(), requested_category):
         return CATEGORY_MATCH_BOOST, "category_match"
     if not specific_categories:
         return 0.0, "category_unverified"
@@ -94,6 +101,6 @@ def matched_constraints(product: ProductRecord, constraints: dict[str, Constrain
         if attribute == "budget":
             continue
         target = (hard if constraint.strength == "hard" else soft)
-        if str(constraint.value).lower() in text:
+        if _contains_word(text, str(constraint.value).lower()):
             target.append(attribute)
     return tuple(hard), tuple(soft)
