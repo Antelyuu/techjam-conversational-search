@@ -1,10 +1,9 @@
+import importlib.util
 import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-
-import numpy as np
 
 from shopping_agent.catalog import normalize_product
 from shopping_agent.contracts import SearchRequest, SessionState
@@ -61,22 +60,29 @@ class Phase3RetrievalTest(unittest.TestCase):
         self.assertEqual(candidates[0].route_ranks, {"lexical": 1})
         self.assertEqual(candidates[0].route_scores["lexical"], 9.0)
 
-    def test_weighted_fusion_is_selectable(self):
-        products = {asin: self.product(asin) for asin in ("lexical", "dense")}
+    def test_weighted_fusion_respects_the_route_weights(self):
+        # Each route needs two candidates with distinct scores, otherwise every
+        # candidate normalizes to the same value and the assertion would pass
+        # on union tie-order no matter which weights were supplied.
+        products = {asin: self.product(asin) for asin in ("lex_top", "lex_low", "dense_top", "dense_low")}
+        lexical = lambda _query, _limit: [("lex_top", 9.0), ("lex_low", 1.0)]
+        dense = lambda _query, _limit: [("dense_top", 0.9), ("dense_low", 0.1)]
 
-        candidates = retrieve(
-            self.request(2),
-            2,
-            lambda _query, _limit: [("lexical", 9.0)],
-            products,
-            dense_search=lambda _query, _limit: [("dense", 0.9)],
-            fusion_method=FUSION_WEIGHTED,
-            route_weights={"lexical": 1.0, "dense": 0.0},
-        )
+        def top_of(weights):
+            return retrieve(
+                self.request(4), 4, lexical, products,
+                dense_search=dense, fusion_method=FUSION_WEIGHTED, route_weights=weights,
+            )[0].parent_asin
 
-        self.assertEqual(candidates[0].parent_asin, "lexical")
+        self.assertEqual(top_of({"lexical": 1.0, "dense": 0.0}), "lex_top")
+        self.assertEqual(top_of({"lexical": 0.0, "dense": 1.0}), "dense_top")
 
+    @unittest.skipUnless(
+        importlib.util.find_spec("numpy"), "numpy is only needed for the dense route"
+    )
     def test_mismatched_catalogue_artifact_is_rejected(self):
+        import numpy as np
+
         with tempfile.TemporaryDirectory() as directory:
             embedding_dir = Path(directory)
             np.save(vectors_path(embedding_dir), np.zeros((2, 4), dtype=np.float32))

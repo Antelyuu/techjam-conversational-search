@@ -19,10 +19,12 @@ installed by default in this repo:
     pip install -r requirements.txt
     python3 -m scripts.build_embeddings
 
-Writes to data/embeddings/ (gitignored -- artifacts are large binaries and
-are rebuilt per checkout rather than committed). The first run downloads
-model weights from the Hugging Face Hub and needs network access; every
-run afterwards, and the dense route itself, work fully offline.
+Writes to data/embeddings/. That artifact is deliberately committed so the
+dense route works in a fresh checkout without a rebuild -- do not delete it.
+Re-run this only when the frozen catalogue or the selected model changes;
+rebuilding replaces the bundled artifact. The first run downloads model
+weights from the Hugging Face Hub and needs network access; every run
+afterwards, and the dense route itself, work fully offline.
 """
 
 from __future__ import annotations
