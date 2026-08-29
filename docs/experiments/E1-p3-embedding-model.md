@@ -62,13 +62,42 @@ better-supported claim.
 The boundary scenario (n=10) is statistically meaningless per-scenario -- MiniLM's
 0.300 versus bge's 0.100 is 3 sessions against 1 -- and should not be read as signal.
 
+## Why Browsing is still weak (not a model problem)
+
+Browsing scores far below Buying (MiniLM 0.100 vs 0.250), but this is **structural at
+P3 and not evidence against the dense route**. The agent has no clarification ability
+yet: `starter/agent.py` returns `ask_attribute: None` on every turn, and the simulator
+only discloses a constraint when asked --
+`evaluator/local_evaluator.py:170` replies "Those options are not quite right yet. Ask
+me about one specific attribute." whenever `ask_attribute` is absent. Buying discloses
+a hard constraint in the opening message, so it needs no question; Browsing "begins
+vague" and therefore never gains information.
+
+Recovering hit turns from MTTC makes the closed loop explicit:
+
+| scenario | hits | mean hit turn |
+|---|---|---|
+| buying | 20/80 | **1.00** |
+| browsing | 8/80 | **1.00** |
+| boundary | 3/10 | **1.00** |
+| intent_override | 4/30 | 3.75 |
+
+Every hit in Buying, Browsing and Boundary lands on **turn 1**; turns 2-10 contribute
+nothing. The single exception is Intent Override, the one scenario where the customer
+volunteers new information unprompted on turn 3 or 4. The agent only ever gains
+information it was handed for free.
+
+Two consequences: no embedding model can lift Browsing while the query never grows, and
+Efficiency (20% of the composite) is currently a pure function of HitRate, since every
+hit is at turn 1. Both unlock in P4-T2 (clarification policy), for which P1 already
+left `asked_attributes`, `rejected_attributes` and `clarification_turns` on
+`SessionState` -- all still unused.
+
 ## Open gaps
 
-1. **Baseline per-scenario metrics were never measured.** Browsing is by far the worst
-   scenario for both models (MiniLM 0.100, bge 0.0375, against buying's 0.250 and
-   0.2375), yet improving Browsing is the dense route's stated purpose. Without the
-   no-dense run's scenario split, it is not possible to say whether dense improved
-   Browsing or degraded it. This is the highest-value missing measurement.
+1. **Baseline per-scenario metrics were never measured.** Worth capturing for the
+   record so the P3 delta is documented per scenario, but it will not explain
+   Browsing -- the cause is established above.
 2. **Weighted fusion is unevaluated.** Only the default RRF has been run, so P3-T5's
    "both are configuration-selectable and independently evaluated" is not yet
    satisfied. Given how weak Browsing is, a lexical-weighted blend is worth testing.
