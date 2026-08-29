@@ -11,6 +11,7 @@ from shopping_agent import clarification
 from shopping_agent.catalog import ProductRecord, flatten_field, normalize_product
 from shopping_agent.dense_retrieval import load_dense_retriever
 from shopping_agent.orchestrator import ConversationOrchestrator
+from shopping_agent.reranking import rerank
 from shopping_agent.retrieval import DEFAULT_FUSION, FUSION_METHODS, retrieve
 
 
@@ -26,6 +27,10 @@ _QUESTION_TEXT = {
     "other": "Is there anything else that matters to you?",
 }
 _DEFAULT_QUESTION = "Could you tell me a little more about what you need?"
+
+# How deep a pool the reranker reorders before the top ten are shown. Capped
+# by the pool retrieval actually built (see retrieve()).
+RERANK_POOL = 50
 
 TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 STOPWORDS = {
@@ -90,6 +95,8 @@ class Agent:
         allow_wildcard: bool | None = None,
         use_disagreement: bool | None = None,
         enable_clarification: bool | None = None,
+        enable_reranker: bool | None = None,
+        block_soft_slots: bool | None = None,
     ) -> None:
         self.catalog_path = Path(catalog_path)
         self.connection = sqlite3.connect(":memory:")
@@ -103,9 +110,16 @@ class Agent:
             use_disagreement = _env_flag("SHOPPING_AGENT_DISAGREEMENT", default=True)
         if enable_clarification is None:
             enable_clarification = _env_flag("SHOPPING_AGENT_CLARIFY", default=True)
+        if enable_reranker is None:
+            enable_reranker = _env_flag("SHOPPING_AGENT_RERANK", default=True)
+        if block_soft_slots is None:
+            block_soft_slots = _env_flag("SHOPPING_AGENT_BLOCK_SOFT", default=False)
         self.allow_wildcard = allow_wildcard
         self.use_disagreement = use_disagreement
         self.enable_clarification = enable_clarification
+        self.enable_reranker = enable_reranker
+        self.block_soft_slots = block_soft_slots
+        self._warned: set[str] = set()
 
         if enable_dense is None:
             enable_dense = _env_flag("SHOPPING_AGENT_DENSE", default=True)
@@ -168,11 +182,22 @@ class Agent:
             self.products,
             dense_search=self.dense_search,
             fusion_method=self.fusion_method,
+            candidate_limit=RERANK_POOL if self.enable_reranker else None,
         )
-        recommendations = [
-            {"parent_asin": candidate.parent_asin, "score": candidate.route_scores["combined"]}
-            for candidate in candidates
-        ]
+        if self.enable_reranker:
+            # A reranker failure must not cost the turn: the fused order is
+            # already a valid ranking, so fall back to it rather than raising
+            # into respond() and returning nothing (P4-T4).
+            try:
+                reranked = rerank(candidates, self.products, request.state.constraints, top_k)
+                recommendations = [
+                    {"parent_asin": item.parent_asin, "score": item.score} for item in reranked
+                ]
+            except Exception as error:
+                self._warn_once(f"reranker failed, using fused order: {error}")
+                recommendations = self._fused_recommendations(candidates[:top_k])
+        else:
+            recommendations = self._fused_recommendations(candidates)
         # Asking is free: the evaluator scores recommendations first and then
         # handles ask_attribute separately, so a question never displaces a
         # recommendation. Always return both.
@@ -182,6 +207,7 @@ class Agent:
                 [self.products[c.parent_asin] for c in candidates],
                 allow_wildcard=self.allow_wildcard,
                 use_disagreement=self.use_disagreement,
+                block_soft_slots=self.block_soft_slots,
             )
             if self.enable_clarification
             else None
@@ -193,6 +219,19 @@ class Agent:
             "recommendations": recommendations,
             "usage": {"prompt_tokens": 0, "completion_tokens": 0},
         }
+
+    @staticmethod
+    def _fused_recommendations(candidates) -> list[dict]:
+        return [
+            {"parent_asin": candidate.parent_asin, "score": candidate.route_scores["combined"]}
+            for candidate in candidates
+        ]
+
+    def _warn_once(self, message: str) -> None:
+        if message in self._warned:
+            return
+        self._warned.add(message)
+        print(f"[shopping_agent] {message}", file=sys.stderr)
 
     def _lexical_search(self, query_text: str, limit: int) -> list[tuple[str, float]]:
         unique_terms = list(dict.fromkeys(_terms(query_text)))[:40]

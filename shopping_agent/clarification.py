@@ -137,20 +137,34 @@ def choose_attribute(
     products: list[ProductRecord],
     allow_wildcard: bool = False,
     use_disagreement: bool = True,
+    block_soft_slots: bool = True,
 ) -> str | None:
     """The one attribute to ask about this turn, or None to stop asking.
 
     Never a dead attribute, never one already asked, never one already fixed
     by an extracted constraint, never one the customer has said is empty, and
     never once the question budget is spent.
+
+    `block_soft_slots` decides what counts as fixed. Slot extraction is a
+    regex guess, and it fires on the category phrase itself: "I'm looking for
+    Athletic Walking" sets style=athletic and use_case=walking as *soft*
+    values, which then look like answered questions and silently retire two
+    of the six attributes. Treating only hard constraints as fixed keeps the
+    spec's rule where it means something -- a stated requirement -- without
+    letting a guess spend the question budget.
     """
     if state.clarification_turns >= MAX_CLARIFICATIONS:
         return None
 
+    fixed = {
+        attribute
+        for attribute, constraint in state.constraints.items()
+        if block_soft_slots or constraint.strength == "hard"
+    }
     unavailable = (
         set(state.asked_attributes)
         | set(state.rejected_attributes)
-        | set(state.constraints)
+        | fixed
         | DEAD_ATTRIBUTES
     )
     available = [a for a in ATTRIBUTE_PRIOR_YIELD if a not in unavailable]

@@ -34,10 +34,12 @@ from evaluator.local_evaluator import catalog_index, evaluate, load_jsonl
 from starter.agent import Agent
 
 CONFIGURATIONS = (
-    {"name": "no_questions", "ask": False, "disagreement": False, "wildcard": False},
-    {"name": "prior_only", "ask": True, "disagreement": False, "wildcard": False},
-    {"name": "prior_disagreement", "ask": True, "disagreement": True, "wildcard": False},
-    {"name": "plus_wildcard", "ask": True, "disagreement": True, "wildcard": True},
+    {"name": "no_questions", "ask": False, "disagreement": False, "wildcard": False, "block_soft": True},
+    {"name": "prior_only", "ask": True, "disagreement": False, "wildcard": False, "block_soft": True},
+    {"name": "prior_disagreement", "ask": True, "disagreement": True, "wildcard": False, "block_soft": True},
+    {"name": "soft_askable", "ask": True, "disagreement": True, "wildcard": False, "block_soft": False},
+    {"name": "soft_plus_wildcard", "ask": True, "disagreement": True, "wildcard": True, "block_soft": False},
+    {"name": "wildcard_only", "ask": True, "disagreement": True, "wildcard": True, "block_soft": True},
 )
 
 METRIC_KEYS = ("hit_rate_at_10", "mrr", "mttc", "efficiency", "recommended_technical_score")
@@ -58,11 +60,17 @@ def run_ablation(
             file=sys.stderr,
         )
 
+    # Hold the reranker out so this ablation moves one variable. Its own
+    # effect is measured separately; mixing the two would leave neither
+    # attributable.
+    agent.enable_reranker = False
+
     results: dict[str, dict] = {}
     for configuration in CONFIGURATIONS:
         agent.enable_clarification = configuration["ask"]
         agent.use_disagreement = configuration["disagreement"]
         agent.allow_wildcard = configuration["wildcard"]
+        agent.block_soft_slots = configuration["block_soft"]
         outcome = evaluate(agent, samples, catalog_ids, categories, raw_products)
         # Drop per-session rows; only aggregates matter for the comparison.
         results[configuration["name"]] = {
