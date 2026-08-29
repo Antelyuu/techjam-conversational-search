@@ -35,14 +35,19 @@ class FilterOutcome:
 def evaluate_price(product: ProductRecord, max_price: float | None) -> tuple[bool, str]:
     """Tri-state price rule: known price over budget excludes; known price
     within budget retains; missing price always retains (unverified, not
-    assumed compliant or zero)."""
+    assumed compliant or zero). A "from $X" lower-bound price still
+    excludes if even that lower bound is over budget (the real price can
+    only be higher), but is never confirmed "within_budget" — the actual
+    variant price is unknown."""
     if max_price is None:
         return True, "no_budget_constraint"
     if product.price is None:
         return True, "budget_unverified"
-    if product.price <= max_price:
-        return True, "within_budget"
-    return False, "over_budget"
+    if product.price > max_price:
+        return False, "over_budget"
+    if product.price_is_lower_bound:
+        return True, "budget_unverified"
+    return True, "within_budget"
 
 
 def score_category(product: ProductRecord, requested_category: str | None) -> tuple[float, str]:

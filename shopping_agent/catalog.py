@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 PRICE_RE = re.compile(r"(\d+(?:\.\d+)?)")
+LOWER_BOUND_PRICE_RE = re.compile(r"\b(?:from|starting at|as low as)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -17,6 +18,9 @@ class ProductRecord:
     title: str
     categories: tuple[str, ...]
     price: float | None
+    # True when `price` is a lower bound (e.g. a "from $X" listing across
+    # variants), not the exact price of the specific product.
+    price_is_lower_bound: bool
     searchable_text: str
 
 
@@ -42,15 +46,16 @@ def _normalize_categories(value: object) -> tuple[str, ...]:
     return tuple(str(item).strip().lower() for item in raw if str(item).strip())
 
 
-def _normalize_price(value: object) -> float | None:
+def _normalize_price(value: object) -> tuple[float | None, bool]:
     if value is None or value == "":
-        return None
+        return None, False
     if isinstance(value, (int, float)):
-        return float(value)
-    match = PRICE_RE.search(str(value))
+        return float(value), False
+    text = str(value)
+    match = PRICE_RE.search(text)
     if not match:
-        return None
-    return float(match.group(1))
+        return None, False
+    return float(match.group(1)), LOWER_BOUND_PRICE_RE.search(text) is not None
 
 
 def normalize_product(raw: dict) -> ProductRecord:
@@ -58,11 +63,13 @@ def normalize_product(raw: dict) -> ProductRecord:
         _flatten(raw.get(field))
         for field in ("title", "categories", "features", "details", "store", "description")
     )
+    price, price_is_lower_bound = _normalize_price(raw.get("price"))
     return ProductRecord(
         parent_asin=str(raw["parent_asin"]),
         title=str(raw.get("title") or ""),
         categories=_normalize_categories(raw.get("categories")),
-        price=_normalize_price(raw.get("price")),
+        price=price,
+        price_is_lower_bound=price_is_lower_bound,
         searchable_text=searchable_text,
     )
 
