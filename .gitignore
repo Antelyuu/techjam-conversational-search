@@ -18,3 +18,4 @@ tests/test_organizer_pipeline.py
 *.log
 .claude/settings.local.json
 PROGRESS.md
+handoffs/
