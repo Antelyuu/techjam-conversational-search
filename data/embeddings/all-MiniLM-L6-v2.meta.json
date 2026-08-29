@@ -1,0 +1,9 @@
+{
+  "model_id": "sentence-transformers/all-MiniLM-L6-v2",
+  "model_slug": "all-MiniLM-L6-v2",
+  "query_prefix": "",
+  "dimensions": 384,
+  "product_count": 50000,
+  "normalized": true,
+  "catalog_path": "data/catalog.jsonl"
+}
