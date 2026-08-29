@@ -23,6 +23,7 @@ returns None and the caller falls back to lexical-only retrieval.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Callable
 
@@ -52,6 +53,7 @@ class DenseRetriever:
         embedding_dir: str | Path = EMBEDDING_DIR,
         model_id: str = MODEL_ID,
         query_prefix: str = QUERY_PREFIX,
+        expected_ids: list[str] | None = None,
     ) -> None:
         try:
             import numpy as np
@@ -73,6 +75,22 @@ class DenseRetriever:
         if matrix.shape[0] != len(self._ids):
             raise DenseRouteUnavailable(
                 f"artifact mismatch: {matrix.shape[0]} vectors vs {len(self._ids)} ids; rebuild the artifact"
+            )
+
+        # An artifact built from a different catalogue would map row i to the
+        # wrong product and quietly corrupt every dense result, which is worse
+        # than not running the route at all.
+        if expected_ids is not None and self._ids != expected_ids:
+            if len(self._ids) != len(expected_ids):
+                detail = f"{len(self._ids)} vectors vs {len(expected_ids)} catalogue products"
+            else:
+                differing = next(
+                    (a for a, b in zip(self._ids, expected_ids) if a != b), "unknown"
+                )
+                detail = f"same count but different products (first difference: {differing})"
+            raise DenseRouteUnavailable(
+                f"artifact was built from a different catalogue -- {detail}; "
+                "rebuild with `python3 -m scripts.build_embeddings`"
             )
 
         # The build script normalizes, but re-normalizing defensively keeps the
@@ -112,16 +130,23 @@ def load_dense_retriever(
     model_id: str = MODEL_ID,
     query_prefix: str = QUERY_PREFIX,
     strict: bool = False,
+    expected_ids: list[str] | None = None,
 ) -> DenseSearchFn | None:
     """Build the dense route, or return None if it cannot run.
 
-    Returning None is the normal offline path: the agent then serves
-    lexical-only results instead of failing. Pass strict=True when you want
-    to know *why* the route did not engage instead of silently losing it.
+    Returning None is the supported fallback path: the agent then serves
+    BM25 lexical results instead of failing. The reason is written to stderr
+    rather than swallowed, because a silently missing dense route looks
+    exactly like a working agent that simply scores worse. Pass strict=True
+    to raise instead of falling back.
     """
     try:
-        return DenseRetriever(embedding_dir, model_id, query_prefix).search
-    except DenseRouteUnavailable:
+        return DenseRetriever(embedding_dir, model_id, query_prefix, expected_ids).search
+    except DenseRouteUnavailable as error:
         if strict:
             raise
+        print(
+            f"[shopping_agent] dense route unavailable, falling back to BM25 lexical search: {error}",
+            file=sys.stderr,
+        )
         return None
