@@ -5,7 +5,9 @@ import re
 import sqlite3
 from pathlib import Path
 
+from shopping_agent.catalog import ProductRecord, flatten_field, normalize_product
 from shopping_agent.orchestrator import ConversationOrchestrator
+from shopping_agent.retrieval import retrieve
 
 
 TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
@@ -14,16 +16,6 @@ STOPWORDS = {
     "i", "in", "is", "it", "me", "my", "of", "on", "or", "please", "some",
     "that", "the", "this", "to", "want", "with", "would", "you", "looking",
 }
-
-
-def _text(value: object) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, dict):
-        return " ".join(f"{key} {item}" for key, item in value.items())
-    if isinstance(value, list):
-        return " ".join(str(item) for item in value)
-    return str(value)
 
 
 def _terms(text: str) -> list[str]:
@@ -42,6 +34,7 @@ class Agent:
         self.catalog_path = Path(catalog_path)
         self.connection = sqlite3.connect(":memory:")
         self.orchestrator = ConversationOrchestrator()
+        self.products: dict[str, ProductRecord] = {}
         self._build_index()
 
     def _build_index(self) -> None:
@@ -54,16 +47,18 @@ class Agent:
         batch: list[tuple[str, str, str, str, str, str, str]] = []
         with self.catalog_path.open(encoding="utf-8") as handle:
             for line in handle:
-                product = json.loads(line)
+                raw = json.loads(line)
+                record = normalize_product(raw)
+                self.products[record.parent_asin] = record
                 batch.append(
                     (
-                        str(product["parent_asin"]),
-                        _text(product.get("title")),
-                        _text(product.get("categories")),
-                        _text(product.get("features")),
-                        _text(product.get("details")),
-                        _text(product.get("store")),
-                        _text(product.get("description")),
+                        record.parent_asin,
+                        flatten_field(raw.get("title")),
+                        flatten_field(raw.get("categories")),
+                        flatten_field(raw.get("features")),
+                        flatten_field(raw.get("details")),
+                        flatten_field(raw.get("store")),
+                        flatten_field(raw.get("description")),
                     )
                 )
                 if len(batch) >= 1000:
@@ -83,24 +78,32 @@ class Agent:
         turn: int,
         top_k: int,
     ) -> dict:
-        state, query_text = self.orchestrator.process_turn(session_id, user_message, turn)
-        unique_terms = list(dict.fromkeys(_terms(query_text)))[:40]
-        expression = " OR ".join(f'"{term}"' for term in unique_terms)
-        if not expression:
-            recommendations: list[dict] = []
-        else:
-            rows = self.connection.execute(
-                "SELECT parent_asin FROM products WHERE products MATCH ? "
-                "ORDER BY bm25(products, 0.0, 6.0, 4.0, 2.5, 2.5, 1.5, 1.0) LIMIT ?",
-                (expression, top_k),
-            ).fetchall()
-            recommendations = [{"parent_asin": str(row[0])} for row in rows]
+        request = self.orchestrator.process_turn(session_id, user_message, turn, top_k)
+        candidates = retrieve(request, request.top_k, self._lexical_search, self.products)
+        recommendations = [
+            {"parent_asin": candidate.parent_asin, "score": candidate.route_scores["combined"]}
+            for candidate in candidates
+        ]
         return {
-            "message": self._build_message(state),
+            "message": self._build_message(request.state),
             "ask_attribute": None,
             "recommendations": recommendations,
             "usage": {"prompt_tokens": 0, "completion_tokens": 0},
         }
+
+    def _lexical_search(self, query_text: str, limit: int) -> list[tuple[str, float]]:
+        unique_terms = list(dict.fromkeys(_terms(query_text)))[:40]
+        expression = " OR ".join(f'"{term}"' for term in unique_terms)
+        if not expression:
+            return []
+        rows = self.connection.execute(
+            "SELECT parent_asin, bm25(products, 0.0, 6.0, 4.0, 2.5, 2.5, 1.5, 1.0) AS cost "
+            "FROM products WHERE products MATCH ? ORDER BY cost LIMIT ?",
+            (expression, limit),
+        ).fetchall()
+        # FTS5 bm25() is a cost (lower is better); negate so higher is better,
+        # matching the category boost sign used downstream.
+        return [(str(row[0]), -float(row[1])) for row in rows]
 
     @staticmethod
     def _build_message(state) -> str:

@@ -39,3 +39,25 @@ class SessionState:
     asked_attributes: set[str] = field(default_factory=set)
     rejected_attributes: set[str] = field(default_factory=set)
     clarification_turns: int = 0
+
+
+@dataclass(frozen=True)
+class SearchRequest:
+    """One retrieval request built from a turn's cumulative state."""
+
+    query_text: str
+    state: SessionState
+    top_k: int
+
+
+@dataclass(frozen=True)
+class Candidate:
+    """One ranked retrieval result. route_ranks/route_scores are keyed by
+    retrieval route name (e.g. "lexical") so later phases can add "dense"
+    without changing this shape."""
+
+    parent_asin: str
+    route_ranks: dict[str, int]
+    route_scores: dict[str, float]
+    matched_hard_constraints: tuple[str, ...]
+    matched_soft_preferences: tuple[str, ...]
