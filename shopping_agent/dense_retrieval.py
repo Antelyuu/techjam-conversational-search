@@ -101,6 +101,21 @@ class DenseRetriever:
         self._query_prefix = query_prefix
         self._model = SentenceTransformer(model_id)
 
+        # Catch a model/artifact pairing whose widths disagree here, at startup,
+        # rather than as a shape error on the first query. sentence-transformers
+        # 6.0 renamed get_sentence_embedding_dimension; accept either so the
+        # check does not emit a FutureWarning or break on an older install.
+        dimension_of = getattr(self._model, "get_embedding_dimension", None) or getattr(
+            self._model, "get_sentence_embedding_dimension", None
+        )
+        model_dim = dimension_of() if dimension_of else None
+        if model_dim is not None and matrix.shape[1] != model_dim:
+            raise DenseRouteUnavailable(
+                f"artifact was built with a different model -- {matrix.shape[1]}-dim vectors "
+                f"but {model_id} produces {model_dim}; rebuild with "
+                "`python3 -m scripts.build_embeddings`"
+            )
+
     def search(self, query_text: str, limit: int) -> list[tuple[str, float]]:
         np = self._np
         total = self._matrix.shape[0]
@@ -125,6 +140,33 @@ class DenseRetriever:
         return [(self._ids[int(i)], float(similarities[int(i)])) for i in ordered_idx]
 
 
+def _guard_query_failures(search: DenseSearchFn) -> DenseSearchFn:
+    """Keep a per-query dense failure from taking the whole run down.
+
+    search() runs inside Agent.respond, and the evaluator turns any exception
+    escaping respond() into an empty recommendation list for that turn. An
+    encode error would therefore score ~0 across every session with no
+    diagnostic. Returning no dense hits instead degrades that turn to the
+    lexical route, and the reason is reported once rather than per turn."""
+    warned = False
+
+    def guarded(query_text: str, limit: int) -> list[tuple[str, float]]:
+        nonlocal warned
+        try:
+            return search(query_text, limit)
+        except Exception as error:
+            if not warned:
+                print(
+                    f"[shopping_agent] dense query failed, serving BM25 lexical results "
+                    f"for the rest of this run: {error}",
+                    file=sys.stderr,
+                )
+                warned = True
+            return []
+
+    return guarded
+
+
 def load_dense_retriever(
     embedding_dir: str | Path = EMBEDDING_DIR,
     model_id: str = MODEL_ID,
@@ -141,7 +183,9 @@ def load_dense_retriever(
     to raise instead of falling back.
     """
     try:
-        return DenseRetriever(embedding_dir, model_id, query_prefix, expected_ids).search
+        return _guard_query_failures(
+            DenseRetriever(embedding_dir, model_id, query_prefix, expected_ids).search
+        )
     except Exception as error:
         if strict:
             raise
