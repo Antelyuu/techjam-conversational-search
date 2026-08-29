@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from typing import Callable
 
 from .catalog import ProductRecord
@@ -46,6 +47,24 @@ DEFAULT_ROUTE_WEIGHTS = {"lexical": 0.5, "dense": 0.5}
 # category compatibility, so this constant likely moves or disappears. Whether
 # boosts want more weight is worth measuring as input to that design.
 FUSED_BOOST_SCALE = 0.1
+
+
+# Failures here repeat every turn of every session, so each distinct reason is
+# reported once. Silent degradation is the specific failure this project has
+# already been bitten by: a "model comparison" that was really a lexical run.
+#
+# Deliberately once per *process*, not per Agent: retrieve() is a module
+# function with no instance to hang state on, and the point is that a human
+# sees each distinct failure at least once per run. Agent._warned is per
+# instance for the same reason in reverse -- it has an instance.
+_WARNED: set[str] = set()
+
+
+def _warn_once(message: str) -> None:
+    if message in _WARNED:
+        return
+    _WARNED.add(message)
+    print(f"[shopping_agent] {message}", file=sys.stderr)
 
 
 def _minmax_normalize(scores: dict[str, float]) -> dict[str, float]:
@@ -115,14 +134,30 @@ def retrieve(
     dense_search: Callable[[str, int], list[tuple[str, float]]] | None = None,
     fusion_method: str = DEFAULT_FUSION,
     route_weights: dict[str, float] | None = None,
+    candidate_limit: int | None = None,
 ) -> list[Candidate]:
+    """Rank the candidate pool and return the best `limit` of it.
+
+    `candidate_limit` returns more than `limit` without widening the search,
+    so P4's reranker can reorder a pool deeper than the ten rows that will
+    actually be shown. It never exceeds the pool retrieval actually built.
+    """
     pool_size = min(limit * POOL_MULTIPLIER, MAX_POOL_SIZE)
+    result_limit = min(candidate_limit or limit, pool_size)
 
     routes: dict[str, list[tuple[str, float]]] = {
         "lexical": lexical_search(request.query_text, pool_size)
     }
     if dense_search is not None:
-        routes["dense"] = dense_search(request.query_text, pool_size)
+        # load_dense_retriever() already guards the route it builds, but
+        # retrieve() accepts any callable -- the ablation scripts assign one
+        # directly. A route that raises must cost its own contribution, not
+        # the whole turn, and it must say so rather than degrade in silence
+        # (P4-T4).
+        try:
+            routes["dense"] = dense_search(request.query_text, pool_size)
+        except Exception as error:
+            _warn_once(f"dense route failed, using lexical results only: {error}")
 
     # Candidate union: one entry per parent_asin, carrying each route's rank
     # and score so nothing about where a candidate came from is lost.
@@ -183,7 +218,7 @@ def retrieve(
     scored.sort(key=lambda item: item[0], reverse=True)
 
     candidates: list[Candidate] = []
-    for final_score, parent_asin in scored[:limit]:
+    for final_score, parent_asin in scored[:result_limit]:
         product = products[parent_asin]
         hard, soft = matched_constraints(product, request.state.constraints)
         candidates.append(

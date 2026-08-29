@@ -51,6 +51,18 @@ def apply_candidates(state: SessionState, candidates: list[Candidate], turn: int
             for attribute in list(state.constraints):
                 if attribute in CATEGORY_DEPENDENT_ATTRIBUTES and attribute not in supplied_this_turn:
                     del state.constraints[attribute]
+                    # The answer we held for this slot has just been thrown
+                    # away, so the slot is open again and the question that
+                    # filled it is worth re-asking. Without this the state is
+                    # inconsistent: the value is gone from the query but the
+                    # attribute stays blocked in choose_attribute(), so the
+                    # turn is lost twice over.
+                    #
+                    # rejected_attributes is deliberately *not* cleared. A
+                    # rejection means the customer has no such preference at
+                    # all, which is a fact about them rather than about the
+                    # category they are currently asking after.
+                    state.asked_attributes.discard(attribute)
 
     for attribute, value, strength in candidates:
         state.constraints[attribute] = Constraint(
@@ -60,8 +72,15 @@ def apply_candidates(state: SessionState, candidates: list[Candidate], turn: int
 
 def build_query_text(state: SessionState, latest_message: str) -> str:
     """Cumulative search text: normalized slot values from the whole
-    conversation plus the latest raw message, so single-turn recall is
-    preserved alongside accumulated context."""
+    conversation, then everything the customer has disclosed in answer to a
+    question, then the latest raw message, so single-turn recall is preserved
+    alongside accumulated context.
+
+    Disclosed text is carried explicitly because slot extraction only
+    recognizes known vocabulary. An answer like "Machine wash cold" yields no
+    slot, so without this it would reach exactly one query and then vanish --
+    which is most of the value of having asked."""
     parts = [str(constraint.value) for constraint in state.constraints.values()]
+    parts.extend(state.disclosed_text)
     parts.append(latest_message)
     return " ".join(parts)

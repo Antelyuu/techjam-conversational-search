@@ -7,11 +7,30 @@ import sqlite3
 import sys
 from pathlib import Path
 
+from shopping_agent import clarification
 from shopping_agent.catalog import ProductRecord, flatten_field, normalize_product
 from shopping_agent.dense_retrieval import load_dense_retriever
 from shopping_agent.orchestrator import ConversationOrchestrator
+from shopping_agent.reranking import rerank
 from shopping_agent.retrieval import DEFAULT_FUSION, FUSION_METHODS, retrieve
 
+
+# The evaluator matches on ask_attribute alone and never reads these, but a
+# recommendation list paired with a bare attribute name is not a conversation.
+_QUESTION_TEXT = {
+    "feature": "Which features matter most to you?",
+    "material": "Is there a material you prefer?",
+    "color": "Do you have a colour in mind?",
+    "style": "What style are you going for?",
+    "size": "What size do you need?",
+    "use_case": "What will you mainly use it for?",
+    "other": "Is there anything else that matters to you?",
+}
+_DEFAULT_QUESTION = "Could you tell me a little more about what you need?"
+
+# How deep a pool the reranker reorders before the top ten are shown. Capped
+# by the pool retrieval actually built (see retrieve()).
+RERANK_POOL = 50
 
 TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 STOPWORDS = {
@@ -73,12 +92,36 @@ class Agent:
         catalog_path: str | Path = "data/catalog.jsonl",
         enable_dense: bool | None = None,
         fusion_method: str | None = None,
+        allow_wildcard: bool | None = None,
+        use_disagreement: bool | None = None,
+        enable_clarification: bool | None = None,
+        enable_reranker: bool | None = None,
+        block_soft_slots: bool | None = None,
+        route_weights: dict[str, float] | None = None,
     ) -> None:
         self.catalog_path = Path(catalog_path)
         self.connection = sqlite3.connect(":memory:")
         self.orchestrator = ConversationOrchestrator()
         self.products: dict[str, ProductRecord] = {}
         self._build_index()
+
+        if allow_wildcard is None:
+            allow_wildcard = _env_flag("SHOPPING_AGENT_WILDCARD", default=True)
+        if use_disagreement is None:
+            use_disagreement = _env_flag("SHOPPING_AGENT_DISAGREEMENT", default=True)
+        if enable_clarification is None:
+            enable_clarification = _env_flag("SHOPPING_AGENT_CLARIFY", default=True)
+        if enable_reranker is None:
+            enable_reranker = _env_flag("SHOPPING_AGENT_RERANK", default=True)
+        if block_soft_slots is None:
+            block_soft_slots = _env_flag("SHOPPING_AGENT_BLOCK_SOFT", default=False)
+        self.allow_wildcard = allow_wildcard
+        self.use_disagreement = use_disagreement
+        self.enable_clarification = enable_clarification
+        self.enable_reranker = enable_reranker
+        self.block_soft_slots = block_soft_slots
+        self.route_weights = route_weights
+        self._warned: set[str] = set()
 
         if enable_dense is None:
             enable_dense = _env_flag("SHOPPING_AGENT_DENSE", default=True)
@@ -123,6 +166,25 @@ class Agent:
             cursor.executemany("INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?)", batch)
         self.connection.commit()
 
+    def close(self) -> None:
+        """Release the in-memory FTS index.
+
+        The official harness builds one Agent for a whole run and never needs
+        this, but tests and the ablation scripts build many; without it each
+        leaks a SQLite connection until garbage collection, which surfaces as
+        ResourceWarning. Safe to call more than once.
+        """
+        connection = getattr(self, "connection", None)
+        if connection is not None:
+            connection.close()
+            self.connection = None
+
+    def __enter__(self) -> "Agent":
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self.close()
+
     def reset(self, session_id: str, user_profile: dict) -> None:
         self.orchestrator.reset(session_id, user_profile)
 
@@ -141,17 +203,61 @@ class Agent:
             self.products,
             dense_search=self.dense_search,
             fusion_method=self.fusion_method,
+            route_weights=self.route_weights,
+            candidate_limit=RERANK_POOL if self.enable_reranker else None,
         )
-        recommendations = [
-            {"parent_asin": candidate.parent_asin, "score": candidate.route_scores["combined"]}
-            for candidate in candidates
-        ]
+        if self.enable_reranker:
+            # A reranker failure must not cost the turn: the fused order is
+            # already a valid ranking, so fall back to it rather than raising
+            # into respond() and returning nothing (P4-T4).
+            try:
+                reranked = rerank(candidates, self.products, request.state.constraints, top_k)
+                recommendations = [
+                    {"parent_asin": item.parent_asin, "score": item.score} for item in reranked
+                ]
+            except Exception as error:
+                self._warn_once(f"reranker failed, using fused order: {error}")
+                recommendations = self._fused_recommendations(candidates[:top_k])
+        else:
+            recommendations = self._fused_recommendations(candidates)
+        # Asking is free: the evaluator scores recommendations first and then
+        # handles ask_attribute separately, so a question never displaces a
+        # recommendation. Always return both.
+        # Not asking costs a turn; raising costs the whole session, because the
+        # evaluator turns anything escaping respond() into zero recommendations.
+        # Guarded for the same reason the dense route and reranker are (P4-T4).
+        ask_attribute = None
+        if self.enable_clarification:
+            try:
+                ask_attribute = clarification.choose_attribute(
+                    request.state,
+                    [self.products[c.parent_asin] for c in candidates],
+                    allow_wildcard=self.allow_wildcard,
+                    use_disagreement=self.use_disagreement,
+                    block_soft_slots=self.block_soft_slots,
+                )
+            except Exception as error:
+                self._warn_once(f"clarification policy failed, asking nothing: {error}")
+        self.orchestrator.record_question(request.state, ask_attribute)
         return {
-            "message": self._build_message(request.state),
-            "ask_attribute": None,
+            "message": self._build_message(request.state, ask_attribute),
+            "ask_attribute": ask_attribute,
             "recommendations": recommendations,
             "usage": {"prompt_tokens": 0, "completion_tokens": 0},
         }
+
+    @staticmethod
+    def _fused_recommendations(candidates) -> list[dict]:
+        return [
+            {"parent_asin": candidate.parent_asin, "score": candidate.route_scores["combined"]}
+            for candidate in candidates
+        ]
+
+    def _warn_once(self, message: str) -> None:
+        if message in self._warned:
+            return
+        self._warned.add(message)
+        print(f"[shopping_agent] {message}", file=sys.stderr)
 
     def _lexical_search(self, query_text: str, limit: int) -> list[tuple[str, float]]:
         unique_terms = list(dict.fromkeys(_terms(query_text)))[:40]
@@ -168,8 +274,12 @@ class Agent:
         return [(str(row[0]), -float(row[1])) for row in rows]
 
     @staticmethod
-    def _build_message(state) -> str:
+    def _build_message(state, ask_attribute: str | None = None) -> str:
         if state.constraints:
             summary = ", ".join(f"{c.attribute}={c.value}" for c in state.constraints.values())
-            return f"Here are the closest matches based on {summary}."
-        return "Here are the closest matches I found."
+            opening = f"Here are the closest matches based on {summary}."
+        else:
+            opening = "Here are the closest matches I found."
+        if ask_attribute is None:
+            return opening
+        return f"{opening} {_QUESTION_TEXT.get(ask_attribute, _DEFAULT_QUESTION)}"

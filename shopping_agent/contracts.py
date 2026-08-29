@@ -39,6 +39,13 @@ class SessionState:
     asked_attributes: set[str] = field(default_factory=set)
     rejected_attributes: set[str] = field(default_factory=set)
     clarification_turns: int = 0
+    # Content the customer disclosed in answer to our questions, kept
+    # verbatim. Slot extraction only recognizes known vocabulary, so without
+    # this an answer like "Machine wash cold" would inform one turn's query
+    # and then be lost -- build_query_text only carries the latest message.
+    disclosed_text: list[str] = field(default_factory=list)
+    # The attribute asked on the previous turn, still awaiting an answer.
+    pending_attribute: str | None = None
 
 
 @dataclass(frozen=True)

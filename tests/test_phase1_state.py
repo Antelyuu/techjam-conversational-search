@@ -56,6 +56,32 @@ class Phase1StateTest(unittest.TestCase):
         self.assertEqual(state.constraints["category"].value, "necklace")
         self.assertNotIn("use_case", state.constraints)
 
+    def test_a_cleared_slot_becomes_askable_again(self):
+        """Regression: the value was discarded but the attribute stayed in
+        asked_attributes, so choose_attribute() kept it blocked forever. The
+        turn was then lost twice -- once for the answer, once for the question
+        that could have replaced it."""
+        state = SessionState(session_id="demo", user_profile={})
+        apply_candidates(state, extract_candidate_slots("I need running shoes"), 1)
+        state.asked_attributes.add("use_case")
+
+        apply_candidates(state, extract_candidate_slots("Actually, I want a necklace"), 2)
+
+        self.assertNotIn("use_case", state.constraints)
+        self.assertNotIn("use_case", state.asked_attributes)
+
+    def test_a_rejection_survives_a_category_change(self):
+        """A rejection says the customer has no such preference at all, which
+        is a fact about them and not about the category they are asking
+        after. Re-asking it would spend a turn on a known-empty answer."""
+        state = SessionState(session_id="demo", user_profile={})
+        apply_candidates(state, extract_candidate_slots("I need running shoes"), 1)
+        state.rejected_attributes.add("use_case")
+
+        apply_candidates(state, extract_candidate_slots("Actually, I want a necklace"), 2)
+
+        self.assertIn("use_case", state.rejected_attributes)
+
     def test_common_slots_are_extracted(self):
         candidates = dict(
             (attribute, (value, strength))
@@ -77,6 +103,30 @@ class Phase1StateTest(unittest.TestCase):
         self.assertEqual(classify_intent("I need black shoes", buying, False), "buying")
         self.assertEqual(classify_intent("I am just browsing for something casual", browsing, False), "browsing")
         self.assertTrue(detect_override_cue("Actually, I want boots instead"))
+
+
+class SizeExtractionTest(unittest.TestCase):
+    """Regression: \\b treats an apostrophe as a word boundary, so bare
+    single-letter sizes matched inside contractions. Every evaluator session
+    opens with "I'm looking for ...", which set size="m" on all 200."""
+
+    def sizes(self, text):
+        return [value for attribute, value, _ in extract_candidate_slots(text) if attribute == "size"]
+
+    def test_contractions_are_not_sizes(self):
+        self.assertEqual(self.sizes("I'm looking for boots, but I'm still exploring."), [])
+        self.assertEqual(self.sizes("It's a gift and I'll need it soon"), [])
+
+    def test_single_letter_sizes_need_a_size_cue(self):
+        self.assertEqual(self.sizes("I need size M"), ["m"])
+        self.assertEqual(self.sizes("size: L please"), ["l"])
+
+    def test_word_sizes_still_match_bare(self):
+        self.assertEqual(self.sizes("a medium sweater"), ["medium"])
+        self.assertEqual(self.sizes("I'll take the wide fit"), ["wide"])
+
+    def test_numeric_sizes_still_match(self):
+        self.assertEqual(self.sizes("I need size 10"), ["10"])
 
 
 if __name__ == "__main__":

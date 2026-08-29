@@ -3,13 +3,24 @@ __pycache__/
 .DS_Store
 .env
 results.json
+# Ablation outputs are regenerable by their scripts; the numbers that matter
+# are transcribed into docs/experiments/.
 fusion_ablation.json
+clarification_ablation.json
+rerank_ablation.json
+rerank_weight_sweep.json
 data/catalog.jsonl
 data/releases/
 # The MiniLM embedding artifact is bundled with the submission so dense
 # retrieval works when the organiser loads the catalogue in a fresh runtime.
 # Rebuild with `python3 -m scripts.build_embeddings` only when the catalogue or
 # selected model changes.
+#
+# bge-small is NOT bundled: that model line stopped by team decision (E1), and
+# its .npy is 73 MB. Keep it local. Ignored because a `git add -A` once swept
+# it into a P4 commit and the history had to be rewritten to get it back out.
+data/embeddings/bge-small-en-v1.5.*
+SHA256SUMS
 # Organizer-only code, private evaluation data, manifests, and build reports.
 organizer/
 secure/
@@ -24,3 +35,4 @@ tests/test_organizer_pipeline.py
 .claude/settings.local.json
 PROGRESS.md
 handoffs/
+route_weight_sweep.json

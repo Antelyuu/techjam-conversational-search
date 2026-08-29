@@ -147,7 +147,11 @@ class Phase2RetrievalTest(unittest.TestCase):
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0].parent_asin, "asin-1")
         self.assertEqual(candidates[0].route_ranks, {"lexical": 1})
-        self.assertIn("category", candidates[0].matched_hard_constraints)
+        # Both of this session's constraints are scored by their own feature
+        # downstream (score_category, evaluate_price), so neither is reported
+        # here as well -- reporting them once and scoring them twice is what
+        # inflated category to 1.5 of the reranker's scale.
+        self.assertEqual(candidates[0].matched_hard_constraints, ())
 
 
 if __name__ == "__main__":
