@@ -1,0 +1,7 @@
+# Only needed for Phase 3 dense retrieval work (scripts/embedding_model_benchmark.py
+# and later). The rest of the project remains stdlib-only per README.md.
+#
+# Installing this also pulls in torch, transformers, numpy, and huggingface_hub
+# transitively. First run downloads model weights from the Hugging Face Hub, which
+# requires network access; both models cache locally afterward and run fully offline.
+sentence-transformers==6.0.0
