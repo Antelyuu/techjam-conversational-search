@@ -12,7 +12,13 @@ from shopping_agent.catalog import ProductRecord, flatten_field, normalize_produ
 from shopping_agent.dense_retrieval import load_dense_retriever
 from shopping_agent.orchestrator import ConversationOrchestrator
 from shopping_agent.reranking import rerank
-from shopping_agent.retrieval import DEFAULT_FUSION, FUSION_METHODS, retrieve
+from shopping_agent.retrieval import (
+    DEFAULT_FUSION,
+    FUSION_METHODS,
+    MAX_POOL_SIZE,
+    POOL_MULTIPLIER,
+    retrieve,
+)
 
 
 # The evaluator matches on ask_attribute alone and never reads these, but a
@@ -72,6 +78,19 @@ def _env_flag(name: str, default: bool) -> bool:
     if not raw:
         return default
     return raw in {"1", "true", "yes", "on"}
+
+
+DENSE_LEXICAL_MARGIN_THRESHOLD = 0.005
+
+
+def _should_use_dense(lexical_hits: list[tuple[str, float]]) -> bool:
+    """Use dense retrieval when BM25 has no clearly separated first result."""
+    if len(lexical_hits) < 2:
+        return True
+    top_score = lexical_hits[0][1]
+    runner_up_score = lexical_hits[1][1]
+    relative_margin = (top_score - runner_up_score) / max(abs(top_score), 1e-12)
+    return relative_margin <= DENSE_LEXICAL_MARGIN_THRESHOLD
 
 
 class Agent:
@@ -196,12 +215,22 @@ class Agent:
         top_k: int,
     ) -> dict:
         request = self.orchestrator.process_turn(session_id, user_message, turn, top_k)
+        pool_size = min(request.top_k * POOL_MULTIPLIER, MAX_POOL_SIZE)
+        lexical_hits = self._lexical_search(request.query_text, pool_size)
+
+        def cached_lexical_search(_query_text: str, limit: int):
+            return lexical_hits[:limit]
+
         candidates = retrieve(
             request,
             request.top_k,
-            self._lexical_search,
+            cached_lexical_search,
             self.products,
-            dense_search=self.dense_search,
+            dense_search=(
+                self.dense_search
+                if _should_use_dense(lexical_hits)
+                else None
+            ),
             fusion_method=self.fusion_method,
             route_weights=self.route_weights,
             candidate_limit=RERANK_POOL if self.enable_reranker else None,
