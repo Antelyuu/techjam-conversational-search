@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 from pathlib import Path
 
 from shopping_agent.catalog import ProductRecord, flatten_field, normalize_product
+from shopping_agent.dense_retrieval import load_dense_retriever
 from shopping_agent.orchestrator import ConversationOrchestrator
-from shopping_agent.retrieval import retrieve
+from shopping_agent.retrieval import FUSION_RRF, retrieve
 
 
 TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
@@ -26,16 +28,39 @@ def _terms(text: str) -> list[str]:
     ]
 
 
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 class Agent:
     """Stateful multi-turn agent: BM25 retrieval over a cumulative,
-    session-aware query built from accumulated conversation state."""
+    session-aware query built from accumulated conversation state,
+    optionally fused with a dense semantic route.
 
-    def __init__(self, catalog_path: str | Path = "data/catalog.jsonl") -> None:
+    The dense route is off by default and only engages when its embedding
+    artifact and dependencies are present, so the agent always has a
+    working offline lexical path. Enable it without editing code via
+    SHOPPING_AGENT_DENSE=1, and pick the blend with
+    SHOPPING_AGENT_FUSION=rrf|weighted."""
+
+    def __init__(
+        self,
+        catalog_path: str | Path = "data/catalog.jsonl",
+        enable_dense: bool | None = None,
+        fusion_method: str | None = None,
+    ) -> None:
         self.catalog_path = Path(catalog_path)
         self.connection = sqlite3.connect(":memory:")
         self.orchestrator = ConversationOrchestrator()
         self.products: dict[str, ProductRecord] = {}
         self._build_index()
+
+        if enable_dense is None:
+            enable_dense = _env_flag("SHOPPING_AGENT_DENSE")
+        self.fusion_method = fusion_method or os.environ.get("SHOPPING_AGENT_FUSION") or FUSION_RRF
+        # None means the route is unavailable (no artifact or no deps); the
+        # agent then serves lexical-only results instead of failing.
+        self.dense_search = load_dense_retriever() if enable_dense else None
 
     def _build_index(self) -> None:
         cursor = self.connection.cursor()
@@ -79,7 +104,14 @@ class Agent:
         top_k: int,
     ) -> dict:
         request = self.orchestrator.process_turn(session_id, user_message, turn, top_k)
-        candidates = retrieve(request, request.top_k, self._lexical_search, self.products)
+        candidates = retrieve(
+            request,
+            request.top_k,
+            self._lexical_search,
+            self.products,
+            dense_search=self.dense_search,
+            fusion_method=self.fusion_method,
+        )
         recommendations = [
             {"parent_asin": candidate.parent_asin, "score": candidate.route_scores["combined"]}
             for candidate in candidates
