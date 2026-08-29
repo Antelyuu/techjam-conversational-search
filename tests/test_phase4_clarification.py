@@ -10,6 +10,7 @@ from shopping_agent.clarification import (
     interpret_reply,
 )
 from shopping_agent.contracts import ALLOWED_ATTRIBUTES, Constraint, SessionState
+from shopping_agent.orchestrator import ConversationOrchestrator
 
 
 def product(parent_asin, **overrides):
@@ -152,6 +153,47 @@ class CoverageTest(unittest.TestCase):
 
     def test_empty_pool_is_neutral(self):
         self.assertEqual(attribute_coverage([], "color"), (0.0, 0.0))
+
+
+class LeadInStrippingTest(unittest.TestCase):
+    """The lead-in cap was 60 characters, and a Buying opener's colon sits
+    after the category name -- past 60 for 27 of the 87 such openers on the
+    public set. Those sessions dropped their hard constraint instead of
+    keeping it."""
+
+    def absorb(self, message, asked="feature"):
+        state = SessionState("demo", {})
+        state.pending_attribute = asked
+        ConversationOrchestrator._absorb_answer(state, message, False)
+        return state.disclosed_text
+
+    def test_a_long_category_opener_still_yields_its_constraint(self):
+        message = (
+            "I'm looking for Novelty Costumes Accessories Hats Caps. "
+            "A key requirement is: 100% Leather."
+        )
+        self.assertEqual(self.absorb(message, asked=None), ["100% Leather."])
+
+    def test_a_short_category_opener_behaves_the_same(self):
+        message = "I'm looking for Shoes. A key requirement is: 100% Leather."
+        self.assertEqual(self.absorb(message, asked=None), ["100% Leather."])
+
+    def test_a_disclosure_keeps_only_the_constraints(self):
+        message = "For that, what matters is: 100% Cotton; Imported."
+        self.assertEqual(self.absorb(message), ["100% Cotton; Imported."])
+
+    def test_a_colon_inside_a_value_is_not_treated_as_framing(self):
+        message = "For that, what matters is: color: black; Imported."
+        self.assertEqual(self.absorb(message), ["color: black; Imported."])
+
+    def test_an_empty_reply_contributes_nothing(self):
+        self.assertEqual(
+            self.absorb("Those options are not quite right yet. Ask me about one specific attribute."),
+            [],
+        )
+
+    def test_a_vague_opener_is_not_persisted(self):
+        self.assertEqual(self.absorb("I'm looking for boots, but I'm still exploring.", asked=None), [])
 
 
 class InterpretReplyTest(unittest.TestCase):

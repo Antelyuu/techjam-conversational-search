@@ -52,6 +52,11 @@ FUSED_BOOST_SCALE = 0.1
 # Failures here repeat every turn of every session, so each distinct reason is
 # reported once. Silent degradation is the specific failure this project has
 # already been bitten by: a "model comparison" that was really a lexical run.
+#
+# Deliberately once per *process*, not per Agent: retrieve() is a module
+# function with no instance to hang state on, and the point is that a human
+# sees each distinct failure at least once per run. Agent._warned is per
+# instance for the same reason in reverse -- it has an instance.
 _WARNED: set[str] = set()
 
 

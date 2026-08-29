@@ -201,17 +201,21 @@ class Agent:
         # Asking is free: the evaluator scores recommendations first and then
         # handles ask_attribute separately, so a question never displaces a
         # recommendation. Always return both.
-        ask_attribute = (
-            clarification.choose_attribute(
-                request.state,
-                [self.products[c.parent_asin] for c in candidates],
-                allow_wildcard=self.allow_wildcard,
-                use_disagreement=self.use_disagreement,
-                block_soft_slots=self.block_soft_slots,
-            )
-            if self.enable_clarification
-            else None
-        )
+        # Not asking costs a turn; raising costs the whole session, because the
+        # evaluator turns anything escaping respond() into zero recommendations.
+        # Guarded for the same reason the dense route and reranker are (P4-T4).
+        ask_attribute = None
+        if self.enable_clarification:
+            try:
+                ask_attribute = clarification.choose_attribute(
+                    request.state,
+                    [self.products[c.parent_asin] for c in candidates],
+                    allow_wildcard=self.allow_wildcard,
+                    use_disagreement=self.use_disagreement,
+                    block_soft_slots=self.block_soft_slots,
+                )
+            except Exception as error:
+                self._warn_once(f"clarification policy failed, asking nothing: {error}")
         self.orchestrator.record_question(request.state, ask_attribute)
         return {
             "message": self._build_message(request.state, ask_attribute),

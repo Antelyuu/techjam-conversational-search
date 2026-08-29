@@ -2,7 +2,7 @@
 
 Retrieval hands over a pool of candidates carrying each route's rank and
 score. This module puts them in final order using an explicit, fixed feature
-checklist, in the order P4 specifies:
+checklist. P4 specifies these six features, in this stated priority order:
 
     1. hard-constraint satisfaction
     2. category compatibility
@@ -10,6 +10,12 @@ checklist, in the order P4 specifies:
     4. dense route rank
     5. metadata compatibility
     6. soft-preference matches
+
+All six are scored. **The stated priority is not the priority used**, and that
+is deliberate: weighting them in this order measured 0.047 composite *worse*
+than not reranking at all (E4). Retrieval rank now leads and the constraint
+features act as adjustments beneath it. See FEATURE_WEIGHTS for the numbers
+and the reasoning.
 
 Every feature contributes ``weight * value`` with ``value`` in 0-1, and every
 contribution is recorded on the result. That is the point of the phase's

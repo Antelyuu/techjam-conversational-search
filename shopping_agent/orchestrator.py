@@ -20,7 +20,16 @@ _EMPTY_REPLY_RE = re.compile(
 # followed by the content. Dropping everything up to the first colon keeps the
 # constraint text and discards the framing, and leaves a message without a
 # colon untouched.
-_LEAD_IN_RE = re.compile(r"^[^:]{0,60}:\s*")
+#
+# MEASURED: the cap was 60 and that was too tight. A Buying opener is
+# "I'm looking for {category}. A key requirement is: {constraint}.", so the
+# colon sits after the category name -- median 58 characters but up to 81 on
+# the public set, and 27 of the 87 such openers ran past 60. Those sessions
+# silently dropped their hard constraint instead of keeping it, which is the
+# most valuable text a Buying session ever volunteers. 120 clears the observed
+# maximum with headroom while still refusing to treat a colon deep inside a
+# long reply as framing.
+_LEAD_IN_RE = re.compile(r"^[^:]{0,120}:\s*")
 
 # A reversal stated up front, which is what actually displaces the answer to
 # our question -- as opposed to the word "instead" appearing somewhere inside
