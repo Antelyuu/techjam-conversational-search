@@ -42,12 +42,18 @@ performance:
   benchmark_sample_texts: 200
   benchmark_environment: "local macOS, Python 3.14, CPU"
   selected_model:
+    dimensions: 384
+    model_size_mb: 86.7
+    license: "apache-2.0"
     startup_seconds: 5.733
     per_turn_query_latency_ms: 8.079
     peak_memory_mb: 456.6
     batch_encode_seconds: 1.298
     texts_per_second: 154.07
   bge_comparison:
+    dimensions: 384
+    model_size_mb: 127.3
+    license: "mit"
     startup_seconds: 5.648
     per_turn_query_latency_ms: 8.097
     peak_memory_mb: 602.0
