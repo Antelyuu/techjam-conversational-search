@@ -40,7 +40,11 @@ class FallbackTest(unittest.TestCase):
 
     def agent(self, **kwargs):
         kwargs.setdefault("enable_dense", False)
-        return Agent(self.catalog_path, **kwargs)
+        instance = Agent(self.catalog_path, **kwargs)
+        # Each test builds its own agent; without this every one leaks a
+        # SQLite connection until collection, which shows up as ResourceWarning.
+        self.addCleanup(instance.close)
+        return instance
 
     def assert_contract_valid(self, response):
         self.assertIsInstance(response, dict)

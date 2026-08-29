@@ -35,3 +35,4 @@ tests/test_organizer_pipeline.py
 .claude/settings.local.json
 PROGRESS.md
 handoffs/
+route_weight_sweep.json

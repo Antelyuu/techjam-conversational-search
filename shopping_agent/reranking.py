@@ -105,6 +105,34 @@ def _rank_value(candidate: Candidate, route: str) -> float:
     return RANK_DECAY / (RANK_DECAY + rank - 1.0)
 
 
+def _budget_value(product: ProductRecord, budget: Constraint | None) -> float:
+    """Score price against the budget, honouring what kind of budget it is.
+
+    A *hard* budget ("under $100") is a ceiling: within it or not.
+
+    A *soft* budget ("around $100") is a target, and must be ranked by
+    closeness the way P2 did. Collapsing it to a ceiling loses that ordering
+    twice over -- $50 ties with $99 despite being half the asking price, and
+    $101 falls off a cliff to zero despite being what the customer asked for.
+    Closeness decays linearly with relative distance, so the target scores
+    1.0, twice the target scores 0.0, and the boundary is smooth.
+    """
+    if budget is None:
+        return 0.0
+    if product.price is None:
+        # Unverified, not compliant: an unpriced item must not outrank one
+        # known to fit.
+        return 0.25
+
+    target = float(budget.value)
+    if budget.strength == "hard":
+        retained, _ = evaluate_price(product, target)
+        return 1.0 if retained else 0.0
+
+    distance = abs(product.price - target)
+    return max(0.0, 1.0 - distance / max(target, 1.0))
+
+
 def _share(matched: tuple[str, ...], constraints: dict[str, Constraint], strength: str) -> float:
     """Share of the constraints of this strength that the candidate matches.
     No constraints of that strength is neutral (0.0), not a free win."""
@@ -123,23 +151,19 @@ def score_candidate(
 ) -> RerankedCandidate:
     """Score one candidate against the feature checklist, in order."""
     category = constraints.get("category")
-    category_boost, _reason = score_category(
-        product, str(category.value) if category is not None else None
-    )
-    # score_category returns +2.0 match / 0.0 unverified / -0.5 mismatch;
-    # rescale onto 0-1 so every feature value means the same thing.
-    category_value = (category_boost + 0.5) / 2.5
-
-    budget = constraints.get("budget")
-    if budget is None:
-        metadata_value = 0.0
-    elif product.price is None:
-        # Unverified, not compliant: an unpriced item must not outrank one
-        # known to be within budget.
-        metadata_value = 0.25
+    if category is None:
+        # A constraint the customer never gave earns no credit. Constant
+        # across candidates either way, so this cannot reorder anything -- but
+        # scoring it 0.2 made every explanation claim partial category credit
+        # in sessions where category was never mentioned.
+        category_value = 0.0
     else:
-        retained, _ = evaluate_price(product, float(budget.value))
-        metadata_value = 1.0 if retained else 0.0
+        category_boost, _reason = score_category(product, str(category.value))
+        # score_category returns +2.0 match / 0.0 unverified / -0.5 mismatch;
+        # rescale onto 0-1 so every feature value means the same thing.
+        category_value = (category_boost + 0.5) / 2.5
+
+    metadata_value = _budget_value(product, constraints.get("budget"))
 
     values = {
         "hard_constraints": _share(candidate.matched_hard_constraints, constraints, "hard"),

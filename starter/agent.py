@@ -97,6 +97,7 @@ class Agent:
         enable_clarification: bool | None = None,
         enable_reranker: bool | None = None,
         block_soft_slots: bool | None = None,
+        route_weights: dict[str, float] | None = None,
     ) -> None:
         self.catalog_path = Path(catalog_path)
         self.connection = sqlite3.connect(":memory:")
@@ -119,6 +120,7 @@ class Agent:
         self.enable_clarification = enable_clarification
         self.enable_reranker = enable_reranker
         self.block_soft_slots = block_soft_slots
+        self.route_weights = route_weights
         self._warned: set[str] = set()
 
         if enable_dense is None:
@@ -164,6 +166,25 @@ class Agent:
             cursor.executemany("INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?)", batch)
         self.connection.commit()
 
+    def close(self) -> None:
+        """Release the in-memory FTS index.
+
+        The official harness builds one Agent for a whole run and never needs
+        this, but tests and the ablation scripts build many; without it each
+        leaks a SQLite connection until garbage collection, which surfaces as
+        ResourceWarning. Safe to call more than once.
+        """
+        connection = getattr(self, "connection", None)
+        if connection is not None:
+            connection.close()
+            self.connection = None
+
+    def __enter__(self) -> "Agent":
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self.close()
+
     def reset(self, session_id: str, user_profile: dict) -> None:
         self.orchestrator.reset(session_id, user_profile)
 
@@ -182,6 +203,7 @@ class Agent:
             self.products,
             dense_search=self.dense_search,
             fusion_method=self.fusion_method,
+            route_weights=self.route_weights,
             candidate_limit=RERANK_POOL if self.enable_reranker else None,
         )
         if self.enable_reranker:
