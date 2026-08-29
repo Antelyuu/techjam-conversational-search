@@ -16,9 +16,15 @@ from __future__ import annotations
 
 import json
 
-from evaluator.local_evaluator import catalog_index, coarse_category, initial_message, intent_card, load_jsonl
+from evaluator.local_evaluator import (
+    catalog_index,
+    coarse_category,
+    initial_message,
+    load_jsonl,
+    materialize_hidden_fields,
+)
 from shopping_agent.catalog import load_catalog
-from shopping_agent.filtering import evaluate_price
+from shopping_agent.filtering import evaluate_price, score_category
 from shopping_agent.intent import extract_candidate_slots
 
 
@@ -31,6 +37,13 @@ def audit(catalog_path: str = "data/catalog.jsonl", dataset_path: str = "data/pu
     targets_with_known_price = 0
     targets_a_hard_budget_filter_would_exclude = 0
     sessions_with_no_category_extracted = 0
+    hard_budgets_evaluated = 0
+    targets_within_budget = 0
+    targets_with_unverified_budget = 0
+    category_constraints_evaluated = 0
+    category_matches = 0
+    category_unverified = 0
+    category_soft_mismatches = 0
 
     for sample in samples:
         target = str(sample["ground_truth"]["parent_asin"])
@@ -41,26 +54,60 @@ def audit(catalog_path: str = "data/catalog.jsonl", dataset_path: str = "data/pu
         if product.price is not None:
             targets_with_known_price += 1
 
-        card = sample.get("intent_card") or intent_card(raw_products[target])
-        effective_sample = {**sample, "intent_card": card}
+        card, behavior = materialize_hidden_fields(sample, raw_products)
+        effective_sample = {**sample, "intent_card": card, "behavior": behavior}
         disclosed: set[str] = set()
         message = initial_message(effective_sample, coarse_category(categories.get(target, [])), disclosed)
         candidates = extract_candidate_slots(message)
 
         hard_budget = next((value for attribute, value, strength in candidates if attribute == "budget" and strength == "hard"), None)
         if hard_budget is not None:
-            retained, _reason = evaluate_price(product, float(hard_budget))
+            hard_budgets_evaluated += 1
+            retained, price_reason = evaluate_price(product, float(hard_budget))
             if not retained:
                 targets_a_hard_budget_filter_would_exclude += 1
+            elif price_reason == "within_budget":
+                targets_within_budget += 1
+            elif price_reason == "budget_unverified":
+                targets_with_unverified_budget += 1
 
-        if not any(attribute == "category" for attribute, _, _ in candidates):
+        requested_category = next((value for attribute, value, _strength in candidates if attribute == "category"), None)
+        if requested_category is None:
             sessions_with_no_category_extracted += 1
+        else:
+            category_constraints_evaluated += 1
+            _boost, category_reason = score_category(product, str(requested_category))
+            if category_reason == "category_match":
+                category_matches += 1
+            elif category_reason == "category_unverified":
+                category_unverified += 1
+            elif category_reason == "category_soft_mismatch":
+                category_soft_mismatches += 1
+
+    targets_survived = sessions_checked - targets_a_hard_budget_filter_would_exclude
 
     return {
         "sessions_checked": sessions_checked,
+        "targets_survived": targets_survived,
+        "targets_removed_by_hard_filters": targets_a_hard_budget_filter_would_exclude,
         "targets_with_known_price": targets_with_known_price,
         "targets_a_hard_budget_filter_would_exclude": targets_a_hard_budget_filter_would_exclude,
         "sessions_with_no_category_extracted_from_turn_1": sessions_with_no_category_extracted,
+        "price_filter": {
+            "hard_constraints_evaluated": hard_budgets_evaluated,
+            "targets_excluded": targets_a_hard_budget_filter_would_exclude,
+            "within_budget": targets_within_budget,
+            "budget_unverified": targets_with_unverified_budget,
+            "no_hard_budget_constraint": sessions_checked - hard_budgets_evaluated,
+        },
+        "category_signal": {
+            "constraints_evaluated": category_constraints_evaluated,
+            "matches": category_matches,
+            "unverified": category_unverified,
+            "soft_mismatches": category_soft_mismatches,
+            "hard_exclusions": 0,
+            "no_category_constraint": sessions_with_no_category_extracted,
+        },
     }
 
 

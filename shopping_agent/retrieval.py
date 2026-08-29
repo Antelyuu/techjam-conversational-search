@@ -34,7 +34,7 @@ def retrieve(
         outcome = evaluate_candidate(product, request.state.constraints)
         if not outcome.retained:
             continue
-        final_score = lexical_score + outcome.category_boost
+        final_score = lexical_score + outcome.category_boost + outcome.budget_boost
         scored.append((final_score, lexical_score, parent_asin))
 
     scored.sort(key=lambda item: item[0], reverse=True)

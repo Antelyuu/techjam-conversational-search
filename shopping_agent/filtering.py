@@ -22,6 +22,7 @@ class FilterOutcome:
     retained: bool
     reason: str
     category_boost: float
+    budget_boost: float = 0.0
 
 
 def evaluate_price(product: ProductRecord, max_price: float | None) -> tuple[bool, str]:
@@ -54,8 +55,19 @@ def score_category(product: ProductRecord, requested_category: str | None) -> tu
 
 def evaluate_candidate(product: ProductRecord, constraints: dict[str, Constraint]) -> FilterOutcome:
     budget = constraints.get("budget")
-    max_price = float(budget.value) if budget is not None else None
-    retained, price_reason = evaluate_price(product, max_price)
+    budget_boost = 0.0
+    if budget is None:
+        retained, price_reason = evaluate_price(product, None)
+    elif budget.strength == "hard":
+        retained, price_reason = evaluate_price(product, float(budget.value))
+    else:
+        retained = True
+        if product.price is None:
+            price_reason = "budget_preference_unverified"
+        else:
+            distance = abs(product.price - float(budget.value))
+            budget_boost = max(-0.25, 0.25 - (distance / max(float(budget.value), 1.0)) * 0.25)
+            price_reason = "budget_preference"
 
     category = constraints.get("category")
     requested_category = str(category.value) if category is not None else None
@@ -67,6 +79,7 @@ def evaluate_candidate(product: ProductRecord, constraints: dict[str, Constraint
         retained=retained,
         reason=reason,
         category_boost=boost,
+        budget_boost=budget_boost,
     )
 
 
