@@ -16,38 +16,154 @@ LexicalSearchFn = Callable[[str, int], list[tuple[str, float]]]
 POOL_MULTIPLIER = 5
 MAX_POOL_SIZE = 200
 
+FUSION_RRF = "rrf"
+FUSION_WEIGHTED = "weighted"
+
+# Standard RRF constant: damps the gap between the very top ranks so one
+# route cannot dominate purely by being confident about its #1.
+RRF_K = 60
+
+DEFAULT_ROUTE_WEIGHTS = {"lexical": 0.5, "dense": 0.5}
+
+# The P2 boosts were tuned against raw BM25 scores, whose pool spans roughly
+# ten units, so a category match was worth about a fifth of that span. Fused
+# scores are normalized to 0-1, so scale the boosts to keep that same
+# relative influence instead of letting a category match outrank everything.
+FUSED_BOOST_SCALE = 0.1
+
+
+def _minmax_normalize(scores: dict[str, float]) -> dict[str, float]:
+    """Map scores onto 0-1. A route that gave every candidate the same score
+    carries no ranking signal, so it collapses to a constant rather than
+    dividing by zero."""
+    if not scores:
+        return {}
+    lowest = min(scores.values())
+    highest = max(scores.values())
+    span = highest - lowest
+    if span <= 0:
+        return {key: 0.0 for key in scores}
+    return {key: (value - lowest) / span for key, value in scores.items()}
+
+
+def _rrf_fusion(
+    parent_asins: list[str],
+    route_ranks: dict[str, dict[str, int]],
+) -> dict[str, float]:
+    """Reciprocal Rank Fusion: combine routes by rank only, so BM25 and
+    cosine scores never have to be made comparable."""
+    return {
+        parent_asin: sum(1.0 / (RRF_K + rank) for rank in route_ranks[parent_asin].values())
+        for parent_asin in parent_asins
+    }
+
+
+def _weighted_fusion(
+    parent_asins: list[str],
+    route_scores: dict[str, dict[str, float]],
+    route_names: list[str],
+    weights: dict[str, float],
+) -> dict[str, float]:
+    """Normalize each route's raw scores independently, then blend them with
+    per-route weights. A candidate a route never returned contributes
+    nothing for that route, so agreement between routes raises a candidate."""
+    normalized_by_route: dict[str, dict[str, float]] = {}
+    for route_name in route_names:
+        route_view = {
+            parent_asin: route_scores[parent_asin][route_name]
+            for parent_asin in parent_asins
+            if route_name in route_scores[parent_asin]
+        }
+        normalized_by_route[route_name] = _minmax_normalize(route_view)
+
+    return {
+        parent_asin: sum(
+            weights.get(route_name, 0.0) * normalized_by_route[route_name].get(parent_asin, 0.0)
+            for route_name in route_names
+        )
+        for parent_asin in parent_asins
+    }
+
 
 def retrieve(
     request: SearchRequest,
     limit: int,
     lexical_search: LexicalSearchFn,
     products: dict[str, ProductRecord],
+    dense_search: Callable[[str, int], list[tuple[str, float]]] | None = None,
+    fusion_method: str = FUSION_RRF,
+    route_weights: dict[str, float] | None = None,
 ) -> list[Candidate]:
     pool_size = min(limit * POOL_MULTIPLIER, MAX_POOL_SIZE)
-    hits = lexical_search(request.query_text, pool_size)
 
-    scored: list[tuple[float, float, str]] = []  # (final_score, lexical_score, parent_asin)
-    for parent_asin, lexical_score in hits:
+    routes: dict[str, list[tuple[str, float]]] = {
+        "lexical": lexical_search(request.query_text, pool_size)
+    }
+    if dense_search is not None:
+        routes["dense"] = dense_search(request.query_text, pool_size)
+
+    # Candidate union: one entry per parent_asin, carrying each route's rank
+    # and score so nothing about where a candidate came from is lost.
+    route_ranks: dict[str, dict[str, int]] = {}
+    route_scores: dict[str, dict[str, float]] = {}
+    for route_name, hits in routes.items():
+        for rank, (parent_asin, score) in enumerate(hits, start=1):
+            route_ranks.setdefault(parent_asin, {})[route_name] = rank
+            route_scores.setdefault(parent_asin, {})[route_name] = score
+
+    retained: list[str] = []
+    outcomes = {}
+    for parent_asin in route_ranks:
         product = products.get(parent_asin)
         if product is None:
             continue
         outcome = evaluate_candidate(product, request.state.constraints)
         if not outcome.retained:
             continue
-        final_score = lexical_score + outcome.category_boost + outcome.budget_boost
-        scored.append((final_score, lexical_score, parent_asin))
+        retained.append(parent_asin)
+        outcomes[parent_asin] = outcome
 
+    route_names = list(routes)
+    if len(route_names) == 1:
+        # Single route: use its raw score, exactly as P2 did. The lexical-only
+        # path is the control in the model comparison, so it must not shift.
+        only_route = route_names[0]
+        base_scores = {
+            parent_asin: route_scores[parent_asin][only_route] for parent_asin in retained
+        }
+        boost_scale = 1.0
+    else:
+        if fusion_method == FUSION_WEIGHTED:
+            weights = route_weights or DEFAULT_ROUTE_WEIGHTS
+            fused = _weighted_fusion(retained, route_scores, route_names, weights)
+        else:
+            fused = _rrf_fusion(retained, route_ranks)
+        # Both methods land on a common 0-1 scale so the boosts below mean the
+        # same thing whichever fusion is selected.
+        base_scores = _minmax_normalize(fused)
+        boost_scale = FUSED_BOOST_SCALE
+
+    scored: list[tuple[float, str]] = []
+    for parent_asin in retained:
+        outcome = outcomes[parent_asin]
+        final_score = base_scores[parent_asin] + boost_scale * (
+            outcome.category_boost + outcome.budget_boost
+        )
+        scored.append((final_score, parent_asin))
+
+    # Stable sort on score alone: ties keep union order, which puts the
+    # lexical route's own ranking first rather than breaking ties arbitrarily.
     scored.sort(key=lambda item: item[0], reverse=True)
 
     candidates: list[Candidate] = []
-    for rank, (final_score, lexical_score, parent_asin) in enumerate(scored[:limit], start=1):
+    for final_score, parent_asin in scored[:limit]:
         product = products[parent_asin]
         hard, soft = matched_constraints(product, request.state.constraints)
         candidates.append(
             Candidate(
                 parent_asin=parent_asin,
-                route_ranks={"lexical": rank},
-                route_scores={"lexical": lexical_score, "combined": final_score},
+                route_ranks=dict(route_ranks[parent_asin]),
+                route_scores={**route_scores[parent_asin], "combined": final_score},
                 matched_hard_constraints=hard,
                 matched_soft_preferences=soft,
             )
