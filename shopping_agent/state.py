@@ -60,8 +60,15 @@ def apply_candidates(state: SessionState, candidates: list[Candidate], turn: int
 
 def build_query_text(state: SessionState, latest_message: str) -> str:
     """Cumulative search text: normalized slot values from the whole
-    conversation plus the latest raw message, so single-turn recall is
-    preserved alongside accumulated context."""
+    conversation, then everything the customer has disclosed in answer to a
+    question, then the latest raw message, so single-turn recall is preserved
+    alongside accumulated context.
+
+    Disclosed text is carried explicitly because slot extraction only
+    recognizes known vocabulary. An answer like "Machine wash cold" yields no
+    slot, so without this it would reach exactly one query and then vanish --
+    which is most of the value of having asked."""
     parts = [str(constraint.value) for constraint in state.constraints.values()]
+    parts.extend(state.disclosed_text)
     parts.append(latest_message)
     return " ".join(parts)

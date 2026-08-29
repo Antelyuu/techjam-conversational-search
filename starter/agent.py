@@ -7,11 +7,25 @@ import sqlite3
 import sys
 from pathlib import Path
 
+from shopping_agent import clarification
 from shopping_agent.catalog import ProductRecord, flatten_field, normalize_product
 from shopping_agent.dense_retrieval import load_dense_retriever
 from shopping_agent.orchestrator import ConversationOrchestrator
 from shopping_agent.retrieval import DEFAULT_FUSION, FUSION_METHODS, retrieve
 
+
+# The evaluator matches on ask_attribute alone and never reads these, but a
+# recommendation list paired with a bare attribute name is not a conversation.
+_QUESTION_TEXT = {
+    "feature": "Which features matter most to you?",
+    "material": "Is there a material you prefer?",
+    "color": "Do you have a colour in mind?",
+    "style": "What style are you going for?",
+    "size": "What size do you need?",
+    "use_case": "What will you mainly use it for?",
+    "other": "Is there anything else that matters to you?",
+}
+_DEFAULT_QUESTION = "Could you tell me a little more about what you need?"
 
 TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 STOPWORDS = {
@@ -73,12 +87,25 @@ class Agent:
         catalog_path: str | Path = "data/catalog.jsonl",
         enable_dense: bool | None = None,
         fusion_method: str | None = None,
+        allow_wildcard: bool | None = None,
+        use_disagreement: bool | None = None,
+        enable_clarification: bool | None = None,
     ) -> None:
         self.catalog_path = Path(catalog_path)
         self.connection = sqlite3.connect(":memory:")
         self.orchestrator = ConversationOrchestrator()
         self.products: dict[str, ProductRecord] = {}
         self._build_index()
+
+        if allow_wildcard is None:
+            allow_wildcard = _env_flag("SHOPPING_AGENT_WILDCARD", default=False)
+        if use_disagreement is None:
+            use_disagreement = _env_flag("SHOPPING_AGENT_DISAGREEMENT", default=True)
+        if enable_clarification is None:
+            enable_clarification = _env_flag("SHOPPING_AGENT_CLARIFY", default=True)
+        self.allow_wildcard = allow_wildcard
+        self.use_disagreement = use_disagreement
+        self.enable_clarification = enable_clarification
 
         if enable_dense is None:
             enable_dense = _env_flag("SHOPPING_AGENT_DENSE", default=True)
@@ -146,9 +173,23 @@ class Agent:
             {"parent_asin": candidate.parent_asin, "score": candidate.route_scores["combined"]}
             for candidate in candidates
         ]
+        # Asking is free: the evaluator scores recommendations first and then
+        # handles ask_attribute separately, so a question never displaces a
+        # recommendation. Always return both.
+        ask_attribute = (
+            clarification.choose_attribute(
+                request.state,
+                [self.products[c.parent_asin] for c in candidates],
+                allow_wildcard=self.allow_wildcard,
+                use_disagreement=self.use_disagreement,
+            )
+            if self.enable_clarification
+            else None
+        )
+        self.orchestrator.record_question(request.state, ask_attribute)
         return {
-            "message": self._build_message(request.state),
-            "ask_attribute": None,
+            "message": self._build_message(request.state, ask_attribute),
+            "ask_attribute": ask_attribute,
             "recommendations": recommendations,
             "usage": {"prompt_tokens": 0, "completion_tokens": 0},
         }
@@ -168,8 +209,12 @@ class Agent:
         return [(str(row[0]), -float(row[1])) for row in rows]
 
     @staticmethod
-    def _build_message(state) -> str:
+    def _build_message(state, ask_attribute: str | None = None) -> str:
         if state.constraints:
             summary = ", ".join(f"{c.attribute}={c.value}" for c in state.constraints.values())
-            return f"Here are the closest matches based on {summary}."
-        return "Here are the closest matches I found."
+            opening = f"Here are the closest matches based on {summary}."
+        else:
+            opening = "Here are the closest matches I found."
+        if ask_attribute is None:
+            return opening
+        return f"{opening} {_QUESTION_TEXT.get(ask_attribute, _DEFAULT_QUESTION)}"

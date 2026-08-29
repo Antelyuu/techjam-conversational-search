@@ -1,8 +1,26 @@
 from __future__ import annotations
 
+import re
+
+from . import clarification
 from . import intent as intent_module
 from . import state as state_module
 from .contracts import SearchRequest, SessionState
+
+# Customer turns that carry no information about the product wanted. Keeping
+# their wording out of the query matters: the nudge below would otherwise
+# contribute "options", "specific" and "attribute" as search terms every time
+# the agent failed to ask a question.
+_EMPTY_REPLY_RE = re.compile(
+    r"not quite right yet|do(?:n'?t| not) have an?\s+(?:additional\s+)?preference",
+    re.IGNORECASE,
+)
+
+# Answers arrive as "For that, what matters is: X; Y." -- a lead-in clause
+# followed by the content. Dropping everything up to the first colon keeps the
+# constraint text and discards the framing, and leaves a message without a
+# colon untouched.
+_LEAD_IN_RE = re.compile(r"^[^:]{0,60}:\s*")
 
 
 class ConversationOrchestrator:
@@ -23,8 +41,59 @@ class ConversationOrchestrator:
 
         candidates = intent_module.extract_candidate_slots(user_message)
         override_triggered = intent_module.detect_override_cue(user_message)
+        self._absorb_answer(state, user_message, override_triggered)
         state_module.apply_candidates(state, candidates, turn)
         state.intent = intent_module.classify_intent(user_message, candidates, override_triggered)
 
         query_text = state_module.build_query_text(state, user_message)
         return SearchRequest(query_text=query_text, state=state, top_k=top_k)
+
+    @staticmethod
+    def _absorb_answer(state: SessionState, user_message: str, override_triggered: bool) -> None:
+        """Fold the reply to our previous question back into session state.
+
+        Three outcomes matter, and they are not interchangeable:
+
+        - The customer named content. Keep it; it is the whole point of asking.
+        - The customer has nothing for that attribute. Never ask it again.
+        - The question was not actually answered -- a Boundary session spending
+          its one free decline, or an Intent Override message arriving in place
+          of the reply. The attribute is still unanswered, so put it back.
+        """
+        asked = state.pending_attribute
+        state.pending_attribute = None
+
+        rejected, boundary_pass = clarification.interpret_reply(user_message)
+        if rejected is not None:
+            state.rejected_attributes.add(rejected)
+            return
+        if boundary_pass or override_triggered:
+            # The question went unanswered rather than answered emptily, so it
+            # is still worth asking. An override message does carry content of
+            # its own, so it falls through; a boundary decline does not.
+            if asked is not None:
+                state.asked_attributes.discard(asked)
+            if boundary_pass:
+                return
+
+        if not user_message or _EMPTY_REPLY_RE.search(user_message):
+            return
+        # Keep the part after a lead-in clause ("A key requirement is: ...",
+        # "For that, what matters is: ...") wherever the customer used one --
+        # that is the constraint text. Absent a lead-in, only keep the message
+        # when it is an answer to a question we actually asked, so an opening
+        # like "I'm looking for boots, but I'm still exploring" does not
+        # persist its filler into every later query.
+        content, substitutions = _LEAD_IN_RE.subn("", user_message.strip())
+        if content and (substitutions or asked is not None):
+            state.disclosed_text.append(content)
+
+    @staticmethod
+    def record_question(state: SessionState, attribute: str | None) -> None:
+        """Mark a question as asked, so the next turn knows what it is
+        waiting on and the policy never repeats itself."""
+        if attribute is None:
+            return
+        state.pending_attribute = attribute
+        state.asked_attributes.add(attribute)
+        state.clarification_turns += 1
