@@ -105,7 +105,7 @@ class Agent:
         self._build_index()
 
         if allow_wildcard is None:
-            allow_wildcard = _env_flag("SHOPPING_AGENT_WILDCARD", default=False)
+            allow_wildcard = _env_flag("SHOPPING_AGENT_WILDCARD", default=True)
         if use_disagreement is None:
             use_disagreement = _env_flag("SHOPPING_AGENT_DISAGREEMENT", default=True)
         if enable_clarification is None:

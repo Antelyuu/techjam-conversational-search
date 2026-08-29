@@ -48,8 +48,14 @@ ATTRIBUTE_PRIOR_YIELD: dict[str, float] = {
 DEAD_ATTRIBUTES = frozenset({"brand", "category", "budget"})
 
 # "other" matches *any* undisclosed constraint in the simulator, which makes
-# it strictly the highest-yield question and a degenerate one. Held back as
-# an opt-in last resort rather than a default; see docs/experiments/E3.
+# it strictly the highest-yield question available.
+#
+# It is reached only once all six specific attributes are exhausted, which is
+# both the honest dialogue shape -- ask what you actually want to know, then
+# ask openly -- and what the measurement supports. Asked as a last resort it
+# is worth +0.051 composite (E3). Asked as a substitute for a real policy it
+# looked worth +0.111, but two thirds of that was really the cost of running
+# out of questions early, which unblocking soft-guessed slots fixed properly.
 WILDCARD_ATTRIBUTE = "other"
 
 # There are only six real attributes and roughly nine usable turns, so the
