@@ -28,12 +28,22 @@ DEFAULT_FUSION = FUSION_WEIGHTED
 # route cannot dominate purely by being confident about its #1.
 RRF_K = 60
 
+# An even split, chosen as a neutral prior and never swept -- not a finding.
 DEFAULT_ROUTE_WEIGHTS = {"lexical": 0.5, "dense": 0.5}
 
-# The P2 boosts were tuned against raw BM25 scores, whose pool spans roughly
-# ten units, so a category match was worth about a fifth of that span. Fused
-# scores are normalized to 0-1, so scale the boosts to keep that same
-# relative influence instead of letting a category match outrank everything.
+# Scales the P2 category/budget boosts onto the 0-1 fused score, so a category
+# match cannot simply outrank the retrieval signal.
+#
+# MEASURED, and this value does not match it: over 80 real opening queries the
+# BM25 pool span is median 5.12 (p10 2.60, p90 12.78), so P2's 2.0 category
+# boost carried ~39% of the span. Preserving that influence would need ~0.39;
+# at 0.1 the boosts carry ~20%, i.e. roughly half the weight P2 gave them.
+# 0.1 is retained only because it is the value the recorded 0.151089 result was
+# measured with -- it is not a tuned or justified choice.
+#
+# Deliberately not tuned here: P4-T1's reranker takes over hard-constraint and
+# category compatibility, so this constant likely moves or disappears. Whether
+# boosts want more weight is worth measuring as input to that design.
 FUSED_BOOST_SCALE = 0.1
 
 
