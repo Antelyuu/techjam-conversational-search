@@ -60,7 +60,9 @@ LETTER_SIZES = ("xxl", "xl", "xs", "small", "medium", "large", "wide", "narrow")
 # "I'm looking for ...", which silently set size="m" on all 200 of them --
 # polluting the query text with a junk term and, once P4 arrived, permanently
 # blocking the size question because the slot looked fixed.
-SIZE_ABBREVIATIONS = ("xs", "s", "m", "l")
+# "xs" is absent because LETTER_SIZES already matches it bare, and the letter
+# branch is checked first -- listing it here was dead (P4 review).
+SIZE_ABBREVIATIONS = ("s", "m", "l")
 
 
 def _word_re(words: tuple[str, ...]) -> re.Pattern[str]:

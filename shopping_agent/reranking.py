@@ -34,7 +34,12 @@ from dataclasses import dataclass
 from . import evidence
 from .catalog import ProductRecord
 from .contracts import Candidate, Constraint
-from .filtering import SCORED_SEPARATELY, evaluate_price, score_category
+from .filtering import (
+    SCORED_SEPARATELY,
+    evaluate_price,
+    score_category,
+    soft_budget_closeness,
+)
 
 # MEASURED, and not what the checklist order suggests. Weighting the features
 # in P4's stated priority order -- hard_constraints 4.0 down to
@@ -168,8 +173,7 @@ def _budget_value(product: ProductRecord, budget: Constraint | None) -> float:
         retained, _ = evaluate_price(product, target)
         return 1.0 if retained else 0.0
 
-    distance = abs(product.price - target)
-    return max(0.0, 1.0 - distance / max(target, 1.0))
+    return max(0.0, soft_budget_closeness(product.price, target))
 
 
 def _share(matched: tuple[str, ...], constraints: dict[str, Constraint], strength: str) -> float:

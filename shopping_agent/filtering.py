@@ -64,6 +64,15 @@ def evaluate_price(product: ProductRecord, max_price: float | None) -> tuple[boo
     return True, "within_budget"
 
 
+def soft_budget_closeness(price: float, target: float) -> float:
+    """Linear closeness to a soft budget target: 1.0 at the target, falling
+    by relative distance, so twice the target reaches 0.0 and beyond it goes
+    negative. Callers clamp and scale to their own range -- the filter turns
+    this into a small pool boost, the reranker into a 0-1 feature value --
+    but the shape is defined once (P4 review: it was duplicated)."""
+    return 1.0 - abs(price - target) / max(target, 1.0)
+
+
 def score_category(product: ProductRecord, requested_category: str | None) -> tuple[float, str]:
     """Conservative category signal: exact match boosts; a product whose
     only category information is the broad umbrella term is neutral
@@ -91,8 +100,8 @@ def evaluate_candidate(product: ProductRecord, constraints: dict[str, Constraint
         if product.price is None:
             price_reason = "budget_preference_unverified"
         else:
-            distance = abs(product.price - float(budget.value))
-            budget_boost = max(-0.25, 0.25 - (distance / max(float(budget.value), 1.0)) * 0.25)
+            closeness = soft_budget_closeness(product.price, float(budget.value))
+            budget_boost = max(-0.25, 0.25 * closeness)
             price_reason = "budget_preference"
 
     category = constraints.get("category")
