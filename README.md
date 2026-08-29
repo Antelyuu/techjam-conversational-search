@@ -60,10 +60,10 @@ environment variables, plain `Agent(catalog_path)`.
 
 | | |
 |---|---|
-| TechnicalScore | **0.810660** |
-| Hit Rate@10 | 0.940 |
-| MRR | 0.645534 |
-| MTTC | 3.650 |
+| TechnicalScore | **0.821381** |
+| Hit Rate@10 | 0.950 |
+| MRR | 0.659603 |
+| MTTC | 3.575 |
 | startup | 1.34 s |
 | per-turn latency | 38 ms median, 72 ms p95 |
 | peak RSS | 0.75 GB |
@@ -77,7 +77,7 @@ environment variables, plain `Agent(catalog_path)`.
 | P4 clarification + reranker | 0.636663 |
 | P5 dense retired + disclosed-evidence scoring | 0.706484 |
 | P5 short-label evidence + retuned tie-breakers (E6) | 0.753328 |
-| **P5 phrase containment + widened pool (E7)** | **0.810660** |
+| **P5 phrase containment + widened pool (E7)** | **0.821381** |
 
 ## Dense Semantic Route (off by default since P5)
 

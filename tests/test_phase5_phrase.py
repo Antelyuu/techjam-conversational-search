@@ -35,6 +35,15 @@ class PhraseCoverageTest(unittest.TestCase):
             phrase_value(product("a"), ["Machine wash cold with like colors"]), 1.0
         )
 
+    def test_a_phrase_cannot_span_two_features(self):
+        """Fields and list items are joined with a boundary marker exactly so
+        that 'Do not machine wash' + 'cold water only' does not contain
+        'machine wash cold' (review finding, P5)."""
+        impostor = product(
+            "c", features=["Do not machine wash", "cold water only"], details={}
+        )
+        self.assertEqual(phrase_value(impostor, ["machine wash cold"]), 0.0)
+
     def test_scattered_tokens_are_not_a_phrase(self):
         """The discriminating case: token coverage ties at 1.0 for a product
         that merely shares the vocabulary; contiguity separates the product
@@ -55,9 +64,25 @@ class PhraseCoverageTest(unittest.TestCase):
 
     def test_a_truncated_last_token_still_matches(self):
         """intent_card() truncates constraints at 180 characters, which can
-        clip the final word."""
+        clip the final word -- and only a disclosure long enough to have hit
+        that limit earns the retry."""
+        long_feature = (
+            "Breathable moisture wicking performance fabric keeps you cool and dry "
+            "through every workout session with reinforced flatlock stitching and "
+            "a tagless collar for all day comfort guaranteed"
+        )
+        target = product("a", features=[long_feature])
+        clipped = long_feature[:180]
+        self.assertEqual(len(clipped), 180)
+        self.assertNotEqual(clipped, long_feature)
+        self.assertEqual(phrase_value(target, [clipped]), 1.0)
+
+    def test_a_short_disclosure_gets_no_truncation_retry(self):
+        """"Machine wash warm" must not match a "Machine wash cold" target by
+        having its last token quietly dropped: a short disclosure was never
+        truncated, so the whole phrase must be present."""
         self.assertEqual(
-            phrase_value(product("a"), ["Machine wash cold with like colo"]), 1.0
+            phrase_value(product("a"), ["Machine wash cold with like colours"]), 0.0
         )
 
     def test_longer_phrases_carry_more_weight(self):

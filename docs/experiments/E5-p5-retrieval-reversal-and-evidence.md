@@ -92,7 +92,11 @@ The route was contaminating the pool, not merely voting badly in it.
 The code, the flag and the embedding artifact all stay. The finding is about
 *this* query distribution; a private set whose customers answer less
 verbatim would move the balance back, and `SHOPPING_AGENT_DENSE=1` restores
-the P4 behaviour exactly.
+the P4 behaviour exactly. *(True at this record's commit, 9c85b68. E6/E7
+have since retuned weights, added two evidence features and widened the
+pool, all of which are live under the flag too -- it now restores only the
+dense route, not P4's numbers; E6's gate table measured dense-always at
+0.728322 in the E6-era configuration.)*
 
 ## P5-T3: scoring what the customer actually disclosed
 

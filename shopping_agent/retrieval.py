@@ -13,11 +13,16 @@ from .filtering import evaluate_candidate, matched_constraints
 LexicalSearchFn = Callable[[str, int], list[tuple[str, float]]]
 
 # How much larger a pool to pull than top_k, so the hard price filter has
-# room to drop over-budget items without starving the final list. The cap
-# accommodates RERANK_POOL (starter/agent.py), which widens the fetch through
-# candidate_limit; it exists so no caller can request an unbounded scan.
+# room to drop over-budget items without starving the final list.
 POOL_MULTIPLIER = 5
-MAX_POOL_SIZE = 250
+# Safety cap on any single fetch, NOT a tuning knob -- the tuned depth is
+# RERANK_POOL (starter/agent.py), which widens the fetch through
+# candidate_limit. Kept far above it deliberately: when the two were equal, a
+# depth experiment above the cap silently reproduced the capped depth while
+# presenting itself as deeper (review finding, P5) -- the silent-truncation
+# pattern this project has now hit three times. E7's 300-800 sweep rows were
+# measured with this cap raised to match each depth.
+MAX_POOL_SIZE = 1000
 
 FUSION_RRF = "rrf"
 FUSION_WEIGHTED = "weighted"

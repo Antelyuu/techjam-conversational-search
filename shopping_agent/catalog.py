@@ -25,12 +25,20 @@ class ProductRecord:
 
 
 def flatten_field(value: object) -> str:
+    """One string per field, with " | " between the values inside it.
+
+    The boundary marker keeps two adjacent features from reading as one
+    phrase: without it, ["Do not machine wash", "cold water only"] flattens
+    to text that *contains* "machine wash cold" contiguously, and P5's
+    phrase-containment feature would credit the impostor (review finding).
+    FTS tokenization and every word/token-level consumer are unaffected --
+    "|" is never a token -- only contiguity checks see the boundary."""
     if value is None:
         return ""
     if isinstance(value, dict):
-        return " ".join(f"{key} {item}" for key, item in value.items())
+        return " | ".join(f"{key} {item}" for key, item in value.items())
     if isinstance(value, list):
-        return " ".join(str(item) for item in value)
+        return " | ".join(str(item) for item in value)
     return str(value)
 
 
@@ -59,9 +67,10 @@ def _normalize_price(value: object) -> tuple[float | None, bool]:
 
 
 def normalize_product(raw: dict) -> ProductRecord:
-    searchable_text = " ".join(
-        flatten_field(raw.get(field))
+    searchable_text = " | ".join(
+        flattened
         for field in ("title", "categories", "features", "details", "store", "description")
+        if (flattened := flatten_field(raw.get(field)))
     )
     price, price_is_lower_bound = _normalize_price(raw.get("price"))
     return ProductRecord(

@@ -176,39 +176,58 @@ def phrase_text(product: ProductRecord) -> str:
     if cached is None:
         if len(_PHRASE_CACHE) >= _TOKEN_CACHE_LIMIT:
             _PHRASE_CACHE.clear()
-        cached = f" {_normalize_phrase(text)} "
+        # Normalize each "|"-bounded segment separately and keep the "|"
+        # between them: a phrase is pure alphanumerics and spaces, so it can
+        # never span a segment boundary (catalog.flatten_field).
+        cached = " " + " | ".join(
+            _normalize_phrase(segment) for segment in text.split("|")
+        ) + " "
         _PHRASE_CACHE[text] = cached
     return cached
 
 
-def disclosure_phrases(disclosures: list[str]) -> list[tuple[str, int]]:
-    """Normalize disclosures once per rerank pool: (phrase, content weight).
+# The card clips each constraint at 180 characters (`_clean_constraint`), so
+# only a disclosure whose text runs close to that limit can have lost part of
+# its final word. Shorter disclosures arrived whole, and granting them the
+# dropped-last-token retry below would let "machine wash warm" match a
+# "machine wash cold" product by quietly discarding the one token that
+# separates them (review finding, P5).
+_TRUNCATION_LENGTH = 170
 
-    The weight is the disclosure's *content* token count, matching the
-    weighting coverage_from_sets uses, so the two evidence features agree on
-    how much each disclosure is worth."""
+
+def disclosure_phrases(disclosures: list[str]) -> list[tuple[str, int, bool]]:
+    """Normalize disclosures once per rerank pool: (phrase, content weight,
+    may-be-truncated).
+
+    The weight is the disclosure's count of *distinct* content tokens -- the
+    same `len(wanted)` that coverage_from_sets uses, so the two evidence
+    features agree on how much each disclosure is worth -- and the same
+    MIN_EVIDENCE_TOKENS floor governs both, so the documented knob means one
+    thing (both points were review findings, P5)."""
     phrases = []
     for disclosure in disclosures:
-        weight = len(_content_tokens(disclosure))
-        if weight == 0:
+        weight = len(frozenset(_content_tokens(disclosure)))
+        if weight < MIN_EVIDENCE_TOKENS:
             continue
-        phrases.append((_normalize_phrase(disclosure), weight))
+        phrases.append(
+            (_normalize_phrase(disclosure), weight, len(disclosure) >= _TRUNCATION_LENGTH)
+        )
     return phrases
 
 
-def phrase_coverage_from(text: str, phrases: list[tuple[str, int]]) -> float:
+def phrase_coverage_from(text: str, phrases: list[tuple[str, int, bool]]) -> float:
     """Length-weighted share of disclosures the text contains contiguously.
 
-    A disclosure whose full phrase is absent gets one retry without its last
-    token, because intent_card() truncates constraints at 180 characters and
-    can clip the final word. Returns 0-1; no usable disclosure is a neutral
-    0.0, exactly as coverage_from_sets."""
+    A disclosure long enough to have hit the card's 180-character clip gets
+    one retry without its last token, which may have been cut mid-word; a
+    shorter one arrived whole and must match whole. Returns 0-1; no usable
+    disclosure is a neutral 0.0, exactly as coverage_from_sets."""
     matched = 0
     total = 0
-    for phrase, weight in phrases:
+    for phrase, weight, may_be_truncated in phrases:
         total += weight
         contained = f" {phrase} " in text
-        if not contained and phrase.count(" ") >= 2:
+        if not contained and may_be_truncated and phrase.count(" ") >= 2:
             contained = f" {phrase.rsplit(' ', 1)[0]} " in text
         if contained:
             matched += weight

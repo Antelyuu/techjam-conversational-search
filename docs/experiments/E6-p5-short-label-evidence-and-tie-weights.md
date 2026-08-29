@@ -82,9 +82,12 @@ Re-swept under min-tokens 1, because T1 changes what the evidence feature is:
 | evidence=48 + lexical_rank=1 | 0.8700 | 0.603246 | 0.752474 |
 | lexical_rank=1 + soft=2..8 | 0.8700 | 0.605760 | **0.753328** |
 
-Halving lexical_rank and doubling evidence are **identical to six decimals**
--- only the evidence:rank ratio matters, and the plateau extends through
-evidence=48, so this is one robust change, not two fragile ones. Adopted
+Halving lexical_rank and doubling evidence land within 0.0002 of the same
+point (0.752474 vs 0.752349 -- not identical, because the other fixed-weight
+features shift relative to lexical_rank too), and once lexical_rank is 1.0,
+raising evidence to 24 or 48 changes nothing **to six decimals**: the
+evidence:rank ratio saturates, so this is one robust change, not two fragile
+ones. Adopted
 `lexical_rank = 1.0` (the smaller diff) and `soft_preferences = 2.0` (first
 point of a plateau flat through 8). HitRate never moves in any of it:
 these weights now only decide MRR ties beneath the evidence ordering.

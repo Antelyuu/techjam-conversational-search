@@ -80,11 +80,13 @@ FEATURE_WEIGHTS: dict[str, float] = {
     "category": 0.0,
     # MEASURED again after MIN_EVIDENCE_TOKENS dropped to 1 (E6): with the
     # evidence feature now firing from turn 1, retrieval rank only breaks its
-    # ties, and halving it against evidence is worth +0.0027 composite --
-    # identical to six decimals with doubling evidence to 24 instead, because
-    # only the ratio matters. dense_rank keeps its E4 value: it is dead by
-    # default (dense off) and live only under SHOPPING_AGENT_DENSE=1, where
-    # this ratio was never measured.
+    # ties, and halving it against evidence is worth +0.0027 composite.
+    # Doubling evidence to 24 instead lands within 0.0002 of the same point
+    # (0.752349 vs 0.752474), and once lexical_rank is 1.0 raising evidence
+    # to 24 or 48 changes nothing to six decimals -- the evidence:rank ratio
+    # saturates. dense_rank keeps its E4 value: it is dead by default (dense
+    # off) and live only under SHOPPING_AGENT_DENSE=1, where this ratio was
+    # never measured.
     "lexical_rank": 1.0,
     "dense_rank": 2.0,
     "metadata": 0.25,

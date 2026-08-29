@@ -89,9 +89,11 @@ the ratio saturated again).
 
 **Pruning `disclosed_text` on an intent override.** The review argued the
 evidence feature keeps ranking by the abandoned intent's quoted sentences.
-Measured, clearing disclosures whenever the customer leads with a reversal:
-0.810660 falls to **0.754924 (-0.044, HitRate -5 points)**. The finding's
-scenario assumes the override abandons target A for target B; this
+Measured at the depth-100 configuration (the run predates the depth-250
+adoption; its own control row reads 0.798916): pruning whenever the customer
+leads with a reversal falls to **0.754924 (-0.043992, HitRate -5 points)**.
+The finding's scenario assumes the override abandons target A for target B;
+this
 generator's override swaps between constraints *of the same target's card*
 ("ignore my earlier preference. What I need is: {hard[0]}"), so the
 pre-override disclosures still quote the true target and pruning deletes
