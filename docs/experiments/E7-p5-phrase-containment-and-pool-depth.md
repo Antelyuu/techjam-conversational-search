@@ -106,6 +106,19 @@ preference", the boundary decline) matches `_EMPTY_REPLY_RE`, and override
 messages always carry a colon lead-in. Declined as unmeasurable on this
 generator; noted for anyone pointing the agent at free-form customers.
 
+## Where the remaining headroom is (and is not)
+
+At the adopted configuration, 12 sessions miss: **1** target never enters the
+250-candidate pool, **11** are pooled but buried, and the buried targets'
+mean evidence coverage is 0.9541 against 0.9848 for hits. Retrieval is
+effectively solved; the residual is targets tied at near-perfect coverage
+with catalogue near-duplicates -- listings whose text contains the same
+quoted constraints, sometimes verbatim. Text similarity has no more signal
+to give there. Anyone attacking the last twelve should look at non-text
+discriminators (price, store, category leaf) or at asking questions chosen
+to split the surviving candidate set, not at retrieval or the evidence
+features, which are measured to be at their ceiling.
+
 ## Hardening, re-measured at the adopted configuration
 
 501 replayed turns, no other load: startup 1.34 s, per-turn latency
