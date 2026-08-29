@@ -78,10 +78,20 @@ from .filtering import (
 FEATURE_WEIGHTS: dict[str, float] = {
     "hard_constraints": 1.0,
     "category": 0.0,
-    "lexical_rank": 2.0,
+    # MEASURED again after MIN_EVIDENCE_TOKENS dropped to 1 (E6): with the
+    # evidence feature now firing from turn 1, retrieval rank only breaks its
+    # ties, and halving it against evidence is worth +0.0027 composite --
+    # identical to six decimals with doubling evidence to 24 instead, because
+    # only the ratio matters. dense_rank keeps its E4 value: it is dead by
+    # default (dense off) and live only under SHOPPING_AGENT_DENSE=1, where
+    # this ratio was never measured.
+    "lexical_rank": 1.0,
     "dense_rank": 2.0,
     "metadata": 0.25,
-    "soft_preferences": 0.1,
+    # MEASURED (E6): 0.1 was tuned when evidence ignored short labels; with
+    # min-tokens at 1 the soft-preference share adds +0.0009 MRR-only on a
+    # plateau flat from 2 through 8. First point of the plateau.
+    "soft_preferences": 2.0,
     # P5-T3, and the largest single feature in the table by a wide margin.
     #
     # MEASURED (E5), dense route off, sweeping this weight alone:
