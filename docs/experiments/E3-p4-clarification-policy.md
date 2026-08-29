@@ -157,6 +157,55 @@ an illusion.
 Flags remain so either half can be turned off: `SHOPPING_AGENT_WILDCARD=0`,
 `SHOPPING_AGENT_BLOCK_SOFT=1`.
 
+## Boundary and Intent Override
+
+P4's exit criteria require these two to be analyzed explicitly rather than
+absorbed into the aggregate.
+
+### Boundary: 0.200 -> 0.900 HitRate, MTTC 9.0 -> 4.7
+
+The scenario declines the first question it is ever asked -- `boundary_used`
+gates a single free pass -- and the handoff treated that as an unavoidable
+wasted turn. It is not, because the decline is *distinguishable from a real
+answer*:
+
+| reply | meaning |
+|---|---|
+| "I don't have **a** preference for X" | the free decline; X is still unanswered |
+| "I don't have an **additional** preference for X" | X is genuinely empty |
+
+`interpret_reply` separates them on that one word. A boundary decline puts the
+attribute back on the list, so the highest-yield question is re-asked
+immediately on the next turn rather than being burned. The trace shows exactly
+this: `feature` asked at turn 1, declined, re-asked at turn 2, answered.
+
+This is a general NLU distinction, not a simulator trick -- "I have no
+preference" and "I have no *further* preference" genuinely differ -- and it
+costs one regex group.
+
+n=10 carries no statistical weight on its own; it is reported because the exit
+criteria ask for it, and because the mechanism is verifiable in a trace rather
+than only in an aggregate.
+
+### Intent Override: 0.2667 -> 0.800 HitRate
+
+This was the one scenario that already worked at P3, because it is the only one
+where the customer volunteers information unprompted -- it was the sole source
+of the non-turn-1 hits in the P3 analysis.
+
+Two mechanics shape it. The evaluator gates the hit check behind
+`override_applied`, so no hit can register before the override fires around turn
+3. And on that turn the override message *replaces* the reply to our question,
+so the question asked the turn before goes unanswered.
+
+The policy treats that displaced question as unasked and re-asks it, the same
+mechanism as the Boundary decline. The distinction is made on a reversal stated
+up front, not on `detect_override_cue`, which is deliberately broad for intent
+classification and fires on "instead" or "no longer" anywhere in the text --
+words that turn up inside the raw product copy customers quote back as
+disclosures. Using the broad cue here would un-ask questions that were answered
+and let the policy repeat itself.
+
 ## Carried forward
 
 - **`prior_disagreement` is nearly free but nearly weightless.** If P5 needs to

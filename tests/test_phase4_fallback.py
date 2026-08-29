@@ -106,6 +106,33 @@ class FallbackTest(unittest.TestCase):
         asked = [r["ask_attribute"] for r in responses if r["ask_attribute"] is not None]
         self.assertEqual(len(asked), len(set(asked)), f"repeated a question: {asked}")
 
+    def test_an_override_word_inside_a_disclosure_does_not_reopen_a_question(self):
+        """Disclosures are raw product copy, so "instead" or "no longer" turn
+        up inside them. Only a reversal stated up front displaces an answer."""
+        agent = self.agent(enable_reranker=True)
+        responses = self.converse(
+            agent,
+            [
+                "I'm looking for shoes",
+                "For that, what matters is: wear these instead of boots; no longer stiff.",
+                "For that, what matters is: breathable mesh.",
+                "For that, what matters is: lightweight.",
+            ],
+        )
+        asked = [r["ask_attribute"] for r in responses if r["ask_attribute"] is not None]
+        self.assertEqual(len(asked), len(set(asked)), f"repeated a question: {asked}")
+
+    def test_a_real_override_reopens_the_displaced_question(self):
+        """The override message arrives instead of the answer, so the question
+        it displaced is unanswered and gets asked again straight away."""
+        agent = self.agent(enable_reranker=True)
+        agent.reset("s", {})
+        first = agent.respond("s", "I'm looking for shoes", 1, TOP_K)
+        second = agent.respond(
+            "s", "Actually, ignore my earlier preference. What I need is: leather.", 2, TOP_K
+        )
+        self.assertEqual(second["ask_attribute"], first["ask_attribute"])
+
     def test_an_empty_query_still_returns_a_valid_response(self):
         agent = self.agent(enable_reranker=True)
         self.converse(agent, ["", "   "])

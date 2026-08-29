@@ -22,6 +22,15 @@ _EMPTY_REPLY_RE = re.compile(
 # colon untouched.
 _LEAD_IN_RE = re.compile(r"^[^:]{0,60}:\s*")
 
+# A reversal stated up front, which is what actually displaces the answer to
+# our question -- as opposed to the word "instead" appearing somewhere inside
+# a product description the customer has just quoted at us.
+_ANSWER_REPLACED_RE = re.compile(
+    r"^\s*(?:actually|never\s*mind|nevermind|scratch that)\b"
+    r"|\bignore (?:my|that|the) (?:earlier|previous|last)\b",
+    re.IGNORECASE,
+)
+
 
 class ConversationOrchestrator:
     """Owns session state across turns. Retrieval and response formatting
@@ -67,7 +76,14 @@ class ConversationOrchestrator:
         if rejected is not None:
             state.rejected_attributes.add(rejected)
             return
-        if boundary_pass or override_triggered:
+        # An override only displaces the answer when the customer leads with
+        # the reversal. detect_override_cue() is deliberately broad for intent
+        # classification -- it fires on "instead" or "no longer" anywhere in
+        # the text -- and disclosures are raw product copy, so using it here
+        # would un-ask attributes that were in fact answered and let the
+        # policy repeat a question.
+        replaced_answer = override_triggered and _ANSWER_REPLACED_RE.search(user_message or "")
+        if boundary_pass or replaced_answer:
             # The question went unanswered rather than answered emptily, so it
             # is still worth asking. An override message does carry content of
             # its own, so it falls through; a boundary decline does not.
