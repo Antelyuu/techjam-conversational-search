@@ -46,6 +46,45 @@ The command writes per-session results and aggregate metrics to `results.json`.
 The included weak BM25 starter scores Hit Rate@10 `0.125`, MRR `0.068034`, and
 MTTC `9.81` on the released public set. See `docs/baseline_results.json`.
 
+## Dense Semantic Route
+
+The agent fuses a dense semantic route with BM25 lexical search, which adds
+matching for paraphrases and scenario-style messages. It is **on by default**
+and needs no environment variables, so it engages under the official harness's
+plain `Agent(catalog_path)` construction.
+
+```bash
+pip install -r requirements.txt      # sentence-transformers (pulls in torch, numpy)
+python3 -m evaluator.local_evaluator
+```
+
+The repository includes the prebuilt MiniLM artifact in `data/embeddings/`, so
+the organiser can load dense retrieval without spending startup time rebuilding
+vectors. Run `python3 -m scripts.build_embeddings` only when the frozen
+catalogue or selected model changes; rebuilding replaces the bundled artifact.
+
+Set `SHOPPING_AGENT_FUSION=weighted` (default) or `rrf` to pick how the two
+routes are blended, and `SHOPPING_AGENT_DENSE=0` to turn the dense route off
+entirely. The model itself is set in `shopping_agent/embedding_config.py`.
+
+Measured on the public set (`docs/experiments/E2-p3-fusion-ablation.md`):
+
+| configuration | TechnicalScore |
+|---|---|
+| lexical only | 0.115573 |
+| dense + RRF fusion | 0.145170 |
+| **dense + weighted fusion (default)** | **0.151089** |
+
+**Network access:** dependency installation and the first local model download
+need the network. Retrieval uses the bundled vectors and does not reach the
+network after the model is available locally.
+
+**BM25 fallback:** if the dependencies are missing, or the bundled artifact was
+built from a different catalogue than the one loaded, the dense route does not
+engage and the agent serves BM25 lexical results instead. The reason is printed
+to stderr rather than swallowed, so a degraded run is visible rather than just
+scoring lower. The agent never fails because the dense route is unavailable.
+
 ## Agent Interface
 
 ```python

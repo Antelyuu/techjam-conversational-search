@@ -3,8 +3,13 @@ __pycache__/
 .DS_Store
 .env
 results.json
+fusion_ablation.json
 data/catalog.jsonl
 data/releases/
+# The MiniLM embedding artifact is bundled with the submission so dense
+# retrieval works when the organiser loads the catalogue in a fresh runtime.
+# Rebuild with `python3 -m scripts.build_embeddings` only when the catalogue or
+# selected model changes.
 # Organizer-only code, private evaluation data, manifests, and build reports.
 organizer/
 secure/
