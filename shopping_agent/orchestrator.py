@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from . import intent as intent_module
 from . import state as state_module
-from .contracts import SessionState
+from .contracts import SearchRequest, SessionState
 
 
 class ConversationOrchestrator:
     """Owns session state across turns. Retrieval and response formatting
     stay in starter/agent.py, the official Agent entry point; this class
-    only produces the updated SessionState and a cumulative query text."""
+    only produces the updated SessionState and the SearchRequest for the
+    current turn."""
 
     def __init__(self) -> None:
         self.store = state_module.SessionStore()
@@ -16,7 +17,7 @@ class ConversationOrchestrator:
     def reset(self, session_id: str, user_profile: dict) -> SessionState:
         return self.store.create(session_id, user_profile)
 
-    def process_turn(self, session_id: str, user_message: str, turn: int) -> tuple[SessionState, str]:
+    def process_turn(self, session_id: str, user_message: str, turn: int, top_k: int) -> SearchRequest:
         state = self.store.get(session_id)
         state.history.append(user_message)
 
@@ -26,4 +27,4 @@ class ConversationOrchestrator:
         state.intent = intent_module.classify_intent(user_message, candidates, override_triggered)
 
         query_text = state_module.build_query_text(state, user_message)
-        return state, query_text
+        return SearchRequest(query_text=query_text, state=state, top_k=top_k)
