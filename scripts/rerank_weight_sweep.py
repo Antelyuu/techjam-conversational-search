@@ -32,6 +32,16 @@ from evaluator.local_evaluator import catalog_index, evaluate, load_jsonl
 from shopping_agent import reranking
 from starter.agent import Agent
 
+# These reproduce the E4-era comparison and deliberately predate P5: the
+# evidence features are pinned to 0.0 EXPLICITLY, because FEATURE_WEIGHTS is
+# replaced wholesale below and a silently missing key would remove the
+# scorer's dominant feature while the output presented itself as a comparison
+# of the current configuration (review finding, P5). Re-running this script
+# measures the historical E4 question, not today's reranker.
+_P5_FEATURES_ZEROED = {
+    "constraint_evidence": 0.0,
+    "phrase_evidence": 0.0,
+}
 SPEC_ORDER = {
     "hard_constraints": 4.0,
     "category": 2.0,
@@ -39,6 +49,7 @@ SPEC_ORDER = {
     "dense_rank": 1.0,
     "metadata": 0.5,
     "soft_preferences": 0.25,
+    **_P5_FEATURES_ZEROED,
 }
 RETRIEVAL_LED = {
     "hard_constraints": 1.0,
@@ -47,6 +58,7 @@ RETRIEVAL_LED = {
     "dense_rank": 2.0,
     "metadata": 0.25,
     "soft_preferences": 0.1,
+    **_P5_FEATURES_ZEROED,
 }
 
 CONFIGURATIONS = (

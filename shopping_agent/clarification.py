@@ -148,9 +148,10 @@ def choose_attribute(
 ) -> str | None:
     """The one attribute to ask about this turn, or None to stop asking.
 
-    Never a dead attribute, never one already asked, never one already fixed
-    by an extracted constraint, never one the customer has said is empty, and
-    never once the question budget is spent.
+    Never a dead attribute, never one already asked (unless `allow_repeats`,
+    the E5 ablation flag, lifts that one rule), never one already fixed by an
+    extracted constraint, never one the customer has said is empty, and never
+    once the question budget is spent.
 
     `block_soft_slots` decides what counts as fixed. Slot extraction is a
     regex guess, and it fires on the category phrase itself: "I'm looking for
