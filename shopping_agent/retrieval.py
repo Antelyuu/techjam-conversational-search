@@ -23,7 +23,7 @@ def retrieve(
     lexical_search: LexicalSearchFn,
     products: dict[str, ProductRecord],
 ) -> list[Candidate]:
-    pool_size = min(max(limit * POOL_MULTIPLIER, limit), MAX_POOL_SIZE)
+    pool_size = min(limit * POOL_MULTIPLIER, MAX_POOL_SIZE)
     hits = lexical_search(request.query_text, pool_size)
 
     scored: list[tuple[float, float, str]] = []  # (final_score, lexical_score, parent_asin)

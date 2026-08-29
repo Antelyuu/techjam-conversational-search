@@ -79,7 +79,7 @@ class Agent:
         top_k: int,
     ) -> dict:
         request = self.orchestrator.process_turn(session_id, user_message, turn, top_k)
-        candidates = retrieve(request, top_k, self._lexical_search, self.products)
+        candidates = retrieve(request, request.top_k, self._lexical_search, self.products)
         recommendations = [
             {"parent_asin": candidate.parent_asin, "score": candidate.route_scores["combined"]}
             for candidate in candidates
