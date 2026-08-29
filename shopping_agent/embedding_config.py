@@ -21,7 +21,11 @@ QUERY_PREFIX = ""
 # Filesystem-safe name for this model's artifact files.
 MODEL_SLUG = MODEL_ID.rsplit("/", maxsplit=1)[-1]
 
-EMBEDDING_DIR = Path("data/embeddings")
+# Anchored to the repository, not the process working directory. The official
+# harness constructs Agent(catalog_path) and may run from anywhere; a relative
+# path silently fails to find the bundled artifact, and the dense route then
+# degrades to BM25 while the run still looks healthy.
+EMBEDDING_DIR = Path(__file__).resolve().parent.parent / "data" / "embeddings"
 
 
 def vectors_path(embedding_dir: Path | str = EMBEDDING_DIR) -> Path:
