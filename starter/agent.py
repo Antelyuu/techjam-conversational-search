@@ -9,7 +9,7 @@ from pathlib import Path
 from shopping_agent.catalog import ProductRecord, flatten_field, normalize_product
 from shopping_agent.dense_retrieval import load_dense_retriever
 from shopping_agent.orchestrator import ConversationOrchestrator
-from shopping_agent.retrieval import FUSION_RRF, retrieve
+from shopping_agent.retrieval import DEFAULT_FUSION, retrieve
 
 
 TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
@@ -62,7 +62,7 @@ class Agent:
 
         if enable_dense is None:
             enable_dense = _env_flag("SHOPPING_AGENT_DENSE", default=True)
-        self.fusion_method = fusion_method or os.environ.get("SHOPPING_AGENT_FUSION") or FUSION_RRF
+        self.fusion_method = fusion_method or os.environ.get("SHOPPING_AGENT_FUSION") or DEFAULT_FUSION
         # None means the route is unavailable (no artifact, no deps, or an
         # artifact built from a different catalogue); the agent then serves
         # BM25 lexical results instead of failing.

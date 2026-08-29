@@ -63,9 +63,17 @@ the organiser can load dense retrieval without spending startup time rebuilding
 vectors. Run `python3 -m scripts.build_embeddings` only when the frozen
 catalogue or selected model changes; rebuilding replaces the bundled artifact.
 
-Set `SHOPPING_AGENT_FUSION=rrf` (default) or `weighted` to pick how the two
+Set `SHOPPING_AGENT_FUSION=weighted` (default) or `rrf` to pick how the two
 routes are blended, and `SHOPPING_AGENT_DENSE=0` to turn the dense route off
 entirely. The model itself is set in `shopping_agent/embedding_config.py`.
+
+Measured on the public set (`docs/experiments/E2-p3-fusion-ablation.md`):
+
+| configuration | TechnicalScore |
+|---|---|
+| lexical only | 0.115573 |
+| dense + RRF fusion | 0.145170 |
+| **dense + weighted fusion (default)** | **0.151089** |
 
 **Network access:** dependency installation and the first local model download
 need the network. Retrieval uses the bundled vectors and does not reach the

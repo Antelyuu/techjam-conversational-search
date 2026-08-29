@@ -18,6 +18,11 @@ MAX_POOL_SIZE = 200
 
 FUSION_RRF = "rrf"
 FUSION_WEIGHTED = "weighted"
+# Weighted is the default: it scored 0.151089 against RRF's 0.145170 on the
+# public set (E2), the gain sitting mostly in MRR. The margin is about one
+# session on HitRate, so re-run scripts/fusion_ablation.py if retrieval inputs
+# change materially -- notably once P4 clarification alters the query mix.
+DEFAULT_FUSION = FUSION_WEIGHTED
 
 # Standard RRF constant: damps the gap between the very top ranks so one
 # route cannot dominate purely by being confident about its #1.
@@ -91,7 +96,7 @@ def retrieve(
     lexical_search: LexicalSearchFn,
     products: dict[str, ProductRecord],
     dense_search: Callable[[str, int], list[tuple[str, float]]] | None = None,
-    fusion_method: str = FUSION_RRF,
+    fusion_method: str = DEFAULT_FUSION,
     route_weights: dict[str, float] | None = None,
 ) -> list[Candidate]:
     pool_size = min(limit * POOL_MULTIPLIER, MAX_POOL_SIZE)
