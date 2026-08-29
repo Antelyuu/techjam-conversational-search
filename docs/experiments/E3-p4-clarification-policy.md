@@ -70,6 +70,26 @@ Fixed in `6141f7c`; sizes that are words on their own still match bare, while
 `s`/`m`/`l` now need an explicit size cue. Worth **+0.011** on its own (the
 `no_questions` row below is 0.162275 against P3's recorded 0.151089).
 
+## A second bug, found in code review
+
+Answers are stripped of their lead-in clause before being kept, so
+*"For that, what matters is: 100% Cotton"* stores the constraint and not the
+framing. The pattern capped that clause at 60 characters -- but a Buying opener
+reads *"I'm looking for {category}. A key requirement is: {constraint}."*, so
+the colon sits after the category name. Measured across the public set the
+colon lands at a median of 58 characters and a maximum of 81, and **27 of the
+87 such openers ran past 60**.
+
+Those sessions silently discarded their hard constraint -- the single most
+valuable piece of text a Buying session ever volunteers -- while
+shorter-category sessions kept it. Raising the cap to 120 clears the observed
+maximum with headroom and is worth **+0.0013**, all of it MRR (0.4595 to
+0.4645, and Buying's own MRR 0.4300 to 0.4346).
+
+Worth recording as a category of defect rather than a one-off: both this and
+the size bug were *silent partial data loss* driven by a threshold that looked
+reasonable and had never been measured against the actual message shapes.
+
 ## Results
 
 ```yaml
