@@ -28,8 +28,11 @@ def _terms(text: str) -> list[str]:
     ]
 
 
-def _env_flag(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
 
 
 class Agent:
@@ -37,11 +40,13 @@ class Agent:
     session-aware query built from accumulated conversation state,
     optionally fused with a dense semantic route.
 
-    The dense route is off by default and only engages when its embedding
-    artifact and dependencies are present, so the agent always has a
-    working offline lexical path. Enable it without editing code via
-    SHOPPING_AGENT_DENSE=1, and pick the blend with
-    SHOPPING_AGENT_FUSION=rrf|weighted."""
+    The dense route is on by default, because the official harness
+    constructs the agent as Agent(catalog_path) with no arguments and no
+    environment variables -- anything opt-in would never run there. It
+    still engages only when its bundled artifact and dependencies are
+    present; otherwise the agent falls back to BM25 lexical search and
+    says so on stderr. Disable it with SHOPPING_AGENT_DENSE=0, and pick
+    the blend with SHOPPING_AGENT_FUSION=rrf|weighted."""
 
     def __init__(
         self,
@@ -56,11 +61,14 @@ class Agent:
         self._build_index()
 
         if enable_dense is None:
-            enable_dense = _env_flag("SHOPPING_AGENT_DENSE")
+            enable_dense = _env_flag("SHOPPING_AGENT_DENSE", default=True)
         self.fusion_method = fusion_method or os.environ.get("SHOPPING_AGENT_FUSION") or FUSION_RRF
-        # None means the route is unavailable (no artifact or no deps); the
-        # agent then serves lexical-only results instead of failing.
-        self.dense_search = load_dense_retriever() if enable_dense else None
+        # None means the route is unavailable (no artifact, no deps, or an
+        # artifact built from a different catalogue); the agent then serves
+        # BM25 lexical results instead of failing.
+        self.dense_search = (
+            load_dense_retriever(expected_ids=sorted(self.products)) if enable_dense else None
+        )
 
     def _build_index(self) -> None:
         cursor = self.connection.cursor()
