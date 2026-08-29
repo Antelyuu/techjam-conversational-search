@@ -109,6 +109,22 @@ FEATURE_WEIGHTS: dict[str, float] = {
     # feature scores ~0 for every candidate and the ordering falls back to the
     # features beneath it. The failure mode is silence, not noise.
     "constraint_evidence": 12.0,
+    # E7, the second half of the evidence story. Token coverage ties at ~1.0
+    # across near-duplicate catalogue copy, and the enlarged pool (RERANK_POOL
+    # 100) admits more such impostors; contiguous containment of the quoted
+    # constraint separates the product the customer is actually quoting from
+    # one that merely shares its vocabulary.
+    #
+    # MEASURED (E7), at pool depth 100, sweeping this weight alone:
+    #
+    #   weight  0.0       2.0       6.0       12.0
+    #   score   0.766930  0.798306  0.798916  0.798291
+    #
+    # A plateau spanning 2-12 with a spread of 0.0006; 6.0 is its centre and
+    # best point. Worth +0.032 composite over depth alone, +0.0335 at the old
+    # depth -- the two changes are independently real. Like token coverage,
+    # the feature fails quiet: no contained phrase scores 0.0 for everyone.
+    "phrase_evidence": 6.0,
 }
 
 # Converts a 1-based route rank to a 0-1 value.
@@ -209,16 +225,20 @@ def score_candidate(
     disclosures: list[str] | None = None,
     *,
     disclosure_tokens: list[frozenset[str]] | None = None,
+    disclosure_phrases: list[tuple[str, int]] | None = None,
 ) -> RerankedCandidate:
     """Score one candidate against the feature checklist, in order.
 
     `disclosures` are the constraint sentences the customer has quoted back
-    in answer to our questions. Omitted, the evidence feature scores 0 for
-    every candidate and cannot reorder anything. rerank() tokenizes them once
-    for the whole pool and passes `disclosure_tokens` instead; a direct caller
-    can hand over the raw strings and pay one tokenization."""
+    in answer to our questions. Omitted, the evidence features score 0 for
+    every candidate and cannot reorder anything. rerank() normalizes them once
+    for the whole pool and passes `disclosure_tokens`/`disclosure_phrases`
+    instead; a direct caller can hand over the raw strings and pay one
+    normalization."""
     if disclosure_tokens is None:
         disclosure_tokens = evidence.disclosure_token_sets(disclosures or [])
+    if disclosure_phrases is None:
+        disclosure_phrases = evidence.disclosure_phrases(disclosures or [])
     category = constraints.get("category")
     if category is None:
         # A constraint the customer never gave earns no credit. Constant
@@ -243,6 +263,9 @@ def score_candidate(
         "soft_preferences": _share(candidate.matched_soft_preferences, constraints, "soft"),
         "constraint_evidence": evidence.coverage_from_sets(
             evidence.product_tokens(product), disclosure_tokens
+        ),
+        "phrase_evidence": evidence.phrase_coverage_from(
+            evidence.phrase_text(product), disclosure_phrases
         ),
     }
 
@@ -271,12 +294,14 @@ def rerank(
     arbitrarily.
     """
     disclosure_tokens = evidence.disclosure_token_sets(disclosures or [])
+    phrases = evidence.disclosure_phrases(disclosures or [])
     scored = [
         score_candidate(
             candidate,
             products[candidate.parent_asin],
             constraints,
             disclosure_tokens=disclosure_tokens,
+            disclosure_phrases=phrases,
         )
         for candidate in candidates
         if candidate.parent_asin in products

@@ -138,11 +138,14 @@ def retrieve(
 ) -> list[Candidate]:
     """Rank the candidate pool and return the best `limit` of it.
 
-    `candidate_limit` returns more than `limit` without widening the search,
-    so P4's reranker can reorder a pool deeper than the ten rows that will
-    actually be shown. It never exceeds the pool retrieval actually built.
+    `candidate_limit` returns more than `limit`, so P4's reranker can reorder
+    a pool deeper than the ten rows that will actually be shown -- and it
+    widens the route fetch to match (capped at MAX_POOL_SIZE), because a
+    reranker that can only reorder what a shallower fetch surfaced cannot
+    rescue anything the fetch missed. It never exceeds the pool retrieval
+    actually built.
     """
-    pool_size = min(limit * POOL_MULTIPLIER, MAX_POOL_SIZE)
+    pool_size = min(max(limit * POOL_MULTIPLIER, candidate_limit or 0), MAX_POOL_SIZE)
     result_limit = min(candidate_limit or limit, pool_size)
 
     routes: dict[str, list[tuple[str, float]]] = {

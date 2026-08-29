@@ -28,9 +28,23 @@ _QUESTION_TEXT = {
 }
 _DEFAULT_QUESTION = "Could you tell me a little more about what you need?"
 
-# How deep a pool the reranker reorders before the top ten are shown. Capped
-# by the pool retrieval actually built (see retrieve()).
-RERANK_POOL = 50
+# How deep a pool the reranker reorders before the top ten are shown. This
+# also widens the BM25 fetch to match (see retrieve()).
+#
+# MEASURED twice, with opposite results, and the difference is the evidence
+# feature. E5 swept 100-800 at MIN_EVIDENCE_TOKENS=3 and found HitRate flat
+# at every depth: a rescued deep candidate could not be told apart, so depth
+# bought nothing. E6's floor removal changed that -- 16 of the 26 remaining
+# misses were targets that never entered the 50-candidate pool while evidence
+# could now rank them if only they arrived. Re-swept (E7):
+#
+#   depth   50        75        100       150       200       400       800
+#   score   0.753328  0.760814  0.766930  0.766610  0.763124  0.764761  0.764661
+#
+# A smooth rise to a peak at 100, then a mild decline as deeper pools admit
+# more high-coverage impostors. 100 is the peak and also the cheapest point
+# past the rise.
+RERANK_POOL = 100
 
 # P5-T1: the dense route is off by default, reversing P3's decision on
 # measurement rather than on preference.

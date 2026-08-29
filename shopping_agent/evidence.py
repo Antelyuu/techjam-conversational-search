@@ -25,8 +25,15 @@ feature exists to close that gap.
 
 from __future__ import annotations
 
+import re
+
 from .catalog import ProductRecord
 from .text import tokenize
+
+# Phrase normalization keeps every token -- stopwords and single letters
+# included -- because contiguity is the signal: "wash in cold" and "wash cold"
+# are different phrases even though they filter to the same content tokens.
+_PHRASE_TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 # Words that carry no evidence: they appear in most product copy, so counting
 # them inflates coverage for candidates that match nothing specific.
@@ -139,3 +146,72 @@ def coverage_from_sets(tokens: frozenset[str], wanted_sets: list[frozenset[str]]
 def coverage(product: ProductRecord, disclosures: list[str]) -> float:
     """How completely this candidate's text accounts for what was disclosed."""
     return coverage_from_sets(product_tokens(product), disclosure_token_sets(disclosures))
+
+
+# ---------------------------------------------------------------------------
+# Phrase containment (E7). Token coverage ties at ~1.0 across near-duplicate
+# catalogue copy -- any candidate sharing the vocabulary scores like the
+# target. But the card quotes each constraint *verbatim*, so the true target
+# contains the disclosure as a contiguous phrase, and a candidate with the
+# same bag of tokens scattered does not. Contiguity is the tie-breaker.
+
+# Same bounding rationale as _TOKEN_CACHE above; kept separate because these
+# hold normalized strings, not token sets.
+_PHRASE_CACHE: dict[str, str] = {}
+
+
+def _normalize_phrase(text: str) -> str:
+    return " ".join(_PHRASE_TOKEN_RE.findall(text.lower()))
+
+
+def phrase_text(product: ProductRecord) -> str:
+    """The candidate's own text as one normalized, space-padded token stream.
+
+    Normalizing both sides to bare tokens is what lets a details-derived
+    disclosure ("Material: 100% Cotton") match the colon-free "Material 100%
+    Cotton" flattening in searchable_text. Padded with spaces so containment
+    checks are whole-token."""
+    text = product.searchable_text
+    cached = _PHRASE_CACHE.get(text)
+    if cached is None:
+        if len(_PHRASE_CACHE) >= _TOKEN_CACHE_LIMIT:
+            _PHRASE_CACHE.clear()
+        cached = f" {_normalize_phrase(text)} "
+        _PHRASE_CACHE[text] = cached
+    return cached
+
+
+def disclosure_phrases(disclosures: list[str]) -> list[tuple[str, int]]:
+    """Normalize disclosures once per rerank pool: (phrase, content weight).
+
+    The weight is the disclosure's *content* token count, matching the
+    weighting coverage_from_sets uses, so the two evidence features agree on
+    how much each disclosure is worth."""
+    phrases = []
+    for disclosure in disclosures:
+        weight = len(_content_tokens(disclosure))
+        if weight == 0:
+            continue
+        phrases.append((_normalize_phrase(disclosure), weight))
+    return phrases
+
+
+def phrase_coverage_from(text: str, phrases: list[tuple[str, int]]) -> float:
+    """Length-weighted share of disclosures the text contains contiguously.
+
+    A disclosure whose full phrase is absent gets one retry without its last
+    token, because intent_card() truncates constraints at 180 characters and
+    can clip the final word. Returns 0-1; no usable disclosure is a neutral
+    0.0, exactly as coverage_from_sets."""
+    matched = 0
+    total = 0
+    for phrase, weight in phrases:
+        total += weight
+        contained = f" {phrase} " in text
+        if not contained and phrase.count(" ") >= 2:
+            contained = f" {phrase.rsplit(' ', 1)[0]} " in text
+        if contained:
+            matched += weight
+    if total == 0:
+        return 0.0
+    return matched / total
