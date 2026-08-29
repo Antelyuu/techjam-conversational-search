@@ -15,8 +15,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
-QUERY_PREFIX = ""
+MODEL_ID = "BAAI/bge-small-en-v1.5"
+QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
 # Filesystem-safe name for this model's artifact files.
 MODEL_SLUG = MODEL_ID.rsplit("/", maxsplit=1)[-1]
