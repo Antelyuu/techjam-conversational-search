@@ -5,6 +5,8 @@ import re
 import sqlite3
 from pathlib import Path
 
+from shopping_agent.orchestrator import ConversationOrchestrator
+
 
 TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 STOPWORDS = {
@@ -33,12 +35,13 @@ def _terms(text: str) -> list[str]:
 
 
 class Agent:
-    """Editable weak baseline: stateless BM25 retrieval with no LLM dependency."""
+    """Stateful multi-turn agent: BM25 retrieval over a cumulative,
+    session-aware query built from accumulated conversation state."""
 
     def __init__(self, catalog_path: str | Path = "data/catalog.jsonl") -> None:
         self.catalog_path = Path(catalog_path)
         self.connection = sqlite3.connect(":memory:")
-        self._sessions: set[str] = set()
+        self.orchestrator = ConversationOrchestrator()
         self._build_index()
 
     def _build_index(self) -> None:
@@ -71,8 +74,7 @@ class Agent:
         self.connection.commit()
 
     def reset(self, session_id: str, user_profile: dict) -> None:
-        # The profile is anonymized and may be used for personalization.
-        self._sessions.add(session_id)
+        self.orchestrator.reset(session_id, user_profile)
 
     def respond(
         self,
@@ -81,9 +83,8 @@ class Agent:
         turn: int,
         top_k: int,
     ) -> dict:
-        if session_id not in self._sessions:
-            raise RuntimeError("reset must be called before respond")
-        unique_terms = list(dict.fromkeys(_terms(user_message)))[:40]
+        state, query_text = self.orchestrator.process_turn(session_id, user_message, turn)
+        unique_terms = list(dict.fromkeys(_terms(query_text)))[:40]
         expression = " OR ".join(f'"{term}"' for term in unique_terms)
         if not expression:
             recommendations: list[dict] = []
@@ -95,8 +96,15 @@ class Agent:
             ).fetchall()
             recommendations = [{"parent_asin": str(row[0])} for row in rows]
         return {
-            "message": "Here are the closest matches I found.",
+            "message": self._build_message(state),
             "ask_attribute": None,
             "recommendations": recommendations,
             "usage": {"prompt_tokens": 0, "completion_tokens": 0},
         }
+
+    @staticmethod
+    def _build_message(state) -> str:
+        if state.constraints:
+            summary = ", ".join(f"{c.attribute}={c.value}" for c in state.constraints.values())
+            return f"Here are the closest matches based on {summary}."
+        return "Here are the closest matches I found."
