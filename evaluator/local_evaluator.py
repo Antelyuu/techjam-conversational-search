@@ -219,14 +219,26 @@ def evaluate(
     catalog_ids: set[str],
     categories: dict[str, list[str]],
     products: dict[str, dict],
+    diagnostic_sessions: list | None = None,
 ) -> dict:
     sessions: list[dict] = []
     total_prompt_tokens = 0
     total_completion_tokens = 0
     for sample in samples:
         session_id = f"public_{uuid.uuid4().hex}"
-        agent.reset(session_id, sample["user_profile"])
         target = str(sample["ground_truth"]["parent_asin"])
+        if diagnostic_sessions is None:
+            agent.reset(session_id, sample["user_profile"])
+        else:
+            scenario = str(sample["scenario_type"])
+            agent.reset(
+                session_id,
+                sample["user_profile"],
+                diagnostic_context={
+                    "scenario": "override" if scenario == "intent_override" else scenario,
+                    "target_asin": target,
+                },
+            )
         effective_intent_card, effective_behavior = materialize_hidden_fields(sample, products)
         effective_sample = {**sample, "intent_card": effective_intent_card, "behavior": effective_behavior}
         disclosed: set[str] = set()
@@ -274,6 +286,10 @@ def evaluate(
             "best_rank": best_rank,
             "reciprocal_rank": 0.0 if best_rank is None else 1.0 / best_rank,
         })
+        if diagnostic_sessions is not None:
+            diagnostic_sessions.append(
+                agent.finalize_diagnostics(session_id, hit_turn=hit_turn, hit_rank=best_rank)
+            )
 
     overall = metric_summary(sessions)
     efficiency = max(0.0, min(1.0, (11.0 - float(overall["mttc"])) / 10.0))

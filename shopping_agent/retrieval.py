@@ -135,6 +135,7 @@ def retrieve(
     fusion_method: str = DEFAULT_FUSION,
     route_weights: dict[str, float] | None = None,
     candidate_limit: int | None = None,
+    tracer=None,
 ) -> list[Candidate]:
     """Rank the candidate pool and return the best `limit` of it.
 
@@ -159,6 +160,21 @@ def retrieve(
         except Exception as error:
             _warn_once(f"dense route failed, using lexical results only: {error}")
 
+    if tracer is not None:
+        lexical_hits = routes["lexical"]
+        tracer.log_retrieval(
+            "lexical",
+            [parent_asin for parent_asin, _score in lexical_hits],
+            [score for _parent_asin, score in lexical_hits],
+        )
+        dense_hits = routes.get("dense", [])
+        tracer.log_retrieval(
+            "dense",
+            [parent_asin for parent_asin, _score in dense_hits],
+            [score for _parent_asin, score in dense_hits],
+            ran="dense" in routes,
+        )
+
     # Candidate union: one entry per parent_asin, carrying each route's rank
     # and score so nothing about where a candidate came from is lost.
     route_ranks: dict[str, dict[str, int]] = {}
@@ -173,17 +189,28 @@ def retrieve(
                 candidate_ranks[route_name] = rank
                 candidate_scores[route_name] = score
 
+    pre_filter_pool: list[str] = []
     retained: list[str] = []
     outcomes = {}
+    exclusion_reasons: set[str] = set()
     for parent_asin in route_ranks:
         product = products.get(parent_asin)
         if product is None:
             continue
+        pre_filter_pool.append(parent_asin)
         outcome = evaluate_candidate(product, request.state.constraints)
         if not outcome.retained:
+            exclusion_reasons.add(outcome.reason)
             continue
         retained.append(parent_asin)
         outcomes[parent_asin] = outcome
+
+    if tracer is not None:
+        tracer.log_filter(
+            pre_filter_pool,
+            retained,
+            reason=",".join(sorted(exclusion_reasons)) or None,
+        )
 
     route_names = list(routes)
     if len(route_names) == 1:
@@ -216,6 +243,9 @@ def retrieve(
     # Stable sort on score alone: ties keep union order, which puts the
     # lexical route's own ranking first rather than breaking ties arbitrarily.
     scored.sort(key=lambda item: item[0], reverse=True)
+
+    if tracer is not None:
+        tracer.log_fusion([parent_asin for _score, parent_asin in scored])
 
     candidates: list[Candidate] = []
     for final_score, parent_asin in scored[:result_limit]:

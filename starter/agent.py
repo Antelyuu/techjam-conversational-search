@@ -7,6 +7,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
+from diagnostics.tracer import PipelineTracer, SessionTrace
 from shopping_agent import clarification
 from shopping_agent.catalog import ProductRecord, flatten_field, normalize_product
 from shopping_agent.dense_retrieval import load_dense_retriever
@@ -141,6 +142,7 @@ class Agent:
         self.block_soft_slots = block_soft_slots
         self.route_weights = route_weights
         self._warned: set[str] = set()
+        self._diagnostic_tracers: dict[str, PipelineTracer] = {}
 
         if enable_dense is None:
             enable_dense = _env_flag("SHOPPING_AGENT_DENSE", default=True)
@@ -204,8 +206,31 @@ class Agent:
     def __exit__(self, *_exc) -> None:
         self.close()
 
-    def reset(self, session_id: str, user_profile: dict) -> None:
+    def reset(
+        self,
+        session_id: str,
+        user_profile: dict,
+        diagnostic_context: dict | None = None,
+    ) -> None:
         self.orchestrator.reset(session_id, user_profile)
+        self._diagnostic_tracers.pop(session_id, None)
+        if diagnostic_context:
+            self._diagnostic_tracers[session_id] = PipelineTracer(
+                session_id=session_id,
+                scenario=str(diagnostic_context["scenario"]),
+                target_asin=str(diagnostic_context["target_asin"]),
+            )
+
+    def finalize_diagnostics(
+        self,
+        session_id: str,
+        hit_turn: int | None,
+        hit_rank: int | None,
+    ) -> SessionTrace | None:
+        tracer = self._diagnostic_tracers.pop(session_id, None)
+        if tracer is None:
+            return None
+        return tracer.finalize(hit_turn, hit_rank)
 
     def respond(
         self,
@@ -215,6 +240,10 @@ class Agent:
         top_k: int,
     ) -> dict:
         request = self.orchestrator.process_turn(session_id, user_message, turn, top_k)
+        tracer = self._diagnostic_tracers.get(session_id)
+        if tracer is not None:
+            tracer.start_turn(turn, is_override_turn=request.state.intent == "override")
+            tracer.log_query(request.query_text, None)
         pool_size = min(request.top_k * POOL_MULTIPLIER, MAX_POOL_SIZE)
         lexical_hits = self._lexical_search(request.query_text, pool_size)
 
@@ -234,6 +263,7 @@ class Agent:
             fusion_method=self.fusion_method,
             route_weights=self.route_weights,
             candidate_limit=RERANK_POOL if self.enable_reranker else None,
+            tracer=tracer,
         )
         if self.enable_reranker:
             # A reranker failure must not cost the turn: the fused order is
@@ -244,11 +274,26 @@ class Agent:
                 recommendations = [
                     {"parent_asin": item.parent_asin, "score": item.score} for item in reranked
                 ]
+                if tracer is not None:
+                    tracer.log_rerank(
+                        [item.parent_asin for item in reranked],
+                        [item.score for item in reranked],
+                    )
             except Exception as error:
                 self._warn_once(f"reranker failed, using fused order: {error}")
                 recommendations = self._fused_recommendations(candidates[:top_k])
+                if tracer is not None:
+                    tracer.log_rerank(
+                        [candidate.parent_asin for candidate in candidates[:top_k]],
+                        [candidate.route_scores["combined"] for candidate in candidates[:top_k]],
+                    )
         else:
             recommendations = self._fused_recommendations(candidates)
+            if tracer is not None:
+                tracer.log_rerank(
+                    [candidate.parent_asin for candidate in candidates],
+                    [candidate.route_scores["combined"] for candidate in candidates],
+                )
         # Asking is free: the evaluator scores recommendations first and then
         # handles ask_attribute separately, so a question never displaces a
         # recommendation. Always return both.
@@ -268,6 +313,12 @@ class Agent:
             except Exception as error:
                 self._warn_once(f"clarification policy failed, asking nothing: {error}")
         self.orchestrator.record_question(request.state, ask_attribute)
+        if tracer is not None:
+            tracer.log_clarification(
+                ask_attribute,
+                pool_size_before_ask=tracer.current_post_filter_pool_size(),
+            )
+            tracer.end_turn([item["parent_asin"] for item in recommendations])
         return {
             "message": self._build_message(request.state, ask_attribute),
             "ask_attribute": ask_attribute,
