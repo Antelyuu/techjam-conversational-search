@@ -134,6 +134,34 @@ boundary 0.900 / 5.000    browsing 0.750 / 5.075
 buying   0.725 / 4.775    intent_override 0.800 / 6.100
 ```
 
+## A rejected refinement: giving the reranker the fused score
+
+Code review observed that `_rank_value` reads only `route_ranks` -- raw
+per-route pool positions -- so the reranker discards both the fusion blend and
+the P2 category/budget boosts that produced the pool, re-deriving its order
+from coarser inputs than the ones it was handed. That is a fair criticism, and
+it was tested by adding the fused `combined` score as a seventh feature.
+
+| config | HitRate@10 | MRR | TechnicalScore |
+|---|---|---|---|
+| adopted (no fused feature) | **0.755** | 0.464476 | 0.634543 |
+| fused_light (fused weight 2.0) | 0.750 | 0.476833 | 0.634750 |
+| fused_led (fused 4.0, ranks 1.0) | 0.745 | 0.476790 | 0.631237 |
+
+**Rejected.** `fused_light` leads by 0.000207 -- two ten-thousandths, and it
+buys that by trading HitRate down (-0.005) for MRR up (+0.012), which is a
+wash rather than a gain. Weighting the fused score above the rank features is
+clearly worse. A permanent seventh feature is not worth a difference this
+size, so the code stays as it was and this is recorded so the idea is not
+re-tried blind.
+
+Note the rows above for `spec_order`, `sharp_ranks`, `retrieval_led` and
+`fused_control` differ slightly from the first sweep (0.585788 vs 0.580538,
+and so on). That is expected: the lead-in cap fix landed between the two runs
+and changed the query text every configuration sees. `adopted` and `both` are
+the same configuration and reproduce each other exactly, which is the internal
+check that the sweep harness is switching what it claims to switch.
+
 ## P4-T5, the optional model reranker
 
 **Not attempted, deliberately.** T5 is marked optional and asks for a local
