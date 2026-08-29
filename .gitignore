@@ -3,6 +3,7 @@ __pycache__/
 .DS_Store
 .env
 results.json
+fusion_ablation.json
 data/catalog.jsonl
 data/releases/
 # The MiniLM embedding artifact is bundled with the submission so dense
