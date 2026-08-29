@@ -108,6 +108,28 @@ this generator; a private set that discloses budgets revives them.
 min-tokens 1: best +0.0013 over incumbent, non-monotonic, and the min1 retune
 subsumes what it was reaching for (rank mattering less). Kept at 5.
 
+**The confidence-gated dense route** (teammate's `phase/5-antelyuu`, 69b7883:
+dense joins the union only when BM25's top two scores sit within a relative
+margin, i.e. only on turns where lexical is unsure). Reproduced faithfully on
+top of this configuration via a `retrieve()` wrapper, dense on:
+
+| config | HitRate@10 | MRR | MTTC | TechnicalScore |
+|---|---|---|---|---|
+| lexical only (shipped) | 0.8700 | 0.605760 | 4.170 | 0.753328 |
+| gated, margin <= 0.005 | 0.8700 | 0.609808 | 4.195 | 0.754042 |
+| gated, margin <= 0.05 | 0.8650 | 0.605524 | 4.280 | 0.748557 |
+| dense always (P4 fusion) | 0.8450 | 0.576075 | 4.350 | 0.728322 |
+
+The gate is a real improvement over unconditional fusion (+0.026) and the
+idea survives E5's cliff finding -- admitting dense only on low-margin turns
+avoids most of the pool contamination. But over the shipped default it buys
+**+0.000714** (HitRate identical, MRR +0.004, MTTC worse), the threshold is
+fragile (0.05 already loses), and the price is the whole dependency budget:
+torch, the 76 MB artifact, ~10 s startup, and the end of the stdlib-only,
+no-network property E5's hardening bought. Rejected on that trade; the wiring
+survives in this record and on the teammate's branch if a private set makes
+dense earn more.
+
 ## Also in this continuation
 
 The pre-merge review (re-run per convention after the handoff lost the first
