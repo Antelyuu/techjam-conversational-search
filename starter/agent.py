@@ -5,7 +5,7 @@ import re
 import sqlite3
 from pathlib import Path
 
-from shopping_agent.catalog import load_catalog
+from shopping_agent.catalog import ProductRecord, flatten_field, normalize_product
 from shopping_agent.orchestrator import ConversationOrchestrator
 from shopping_agent.retrieval import retrieve
 
@@ -16,16 +16,6 @@ STOPWORDS = {
     "i", "in", "is", "it", "me", "my", "of", "on", "or", "please", "some",
     "that", "the", "this", "to", "want", "with", "would", "you", "looking",
 }
-
-
-def _text(value: object) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, dict):
-        return " ".join(f"{key} {item}" for key, item in value.items())
-    if isinstance(value, list):
-        return " ".join(str(item) for item in value)
-    return str(value)
 
 
 def _terms(text: str) -> list[str]:
@@ -44,7 +34,7 @@ class Agent:
         self.catalog_path = Path(catalog_path)
         self.connection = sqlite3.connect(":memory:")
         self.orchestrator = ConversationOrchestrator()
-        self.products = load_catalog(self.catalog_path)
+        self.products: dict[str, ProductRecord] = {}
         self._build_index()
 
     def _build_index(self) -> None:
@@ -57,16 +47,18 @@ class Agent:
         batch: list[tuple[str, str, str, str, str, str, str]] = []
         with self.catalog_path.open(encoding="utf-8") as handle:
             for line in handle:
-                product = json.loads(line)
+                raw = json.loads(line)
+                record = normalize_product(raw)
+                self.products[record.parent_asin] = record
                 batch.append(
                     (
-                        str(product["parent_asin"]),
-                        _text(product.get("title")),
-                        _text(product.get("categories")),
-                        _text(product.get("features")),
-                        _text(product.get("details")),
-                        _text(product.get("store")),
-                        _text(product.get("description")),
+                        record.parent_asin,
+                        flatten_field(raw.get("title")),
+                        flatten_field(raw.get("categories")),
+                        flatten_field(raw.get("features")),
+                        flatten_field(raw.get("details")),
+                        flatten_field(raw.get("store")),
+                        flatten_field(raw.get("description")),
                     )
                 )
                 if len(batch) >= 1000:

@@ -24,7 +24,7 @@ class ProductRecord:
     searchable_text: str
 
 
-def _flatten(value: object) -> str:
+def flatten_field(value: object) -> str:
     if value is None:
         return ""
     if isinstance(value, dict):
@@ -60,7 +60,7 @@ def _normalize_price(value: object) -> tuple[float | None, bool]:
 
 def normalize_product(raw: dict) -> ProductRecord:
     searchable_text = " ".join(
-        _flatten(raw.get(field))
+        flatten_field(raw.get(field))
         for field in ("title", "categories", "features", "details", "store", "description")
     )
     price, price_is_lower_bound = _normalize_price(raw.get("price"))
