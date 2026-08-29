@@ -26,9 +26,15 @@ from __future__ import annotations
 
 import json
 import resource
+import statistics
 import subprocess
 import sys
 import time
+from pathlib import Path
+
+# Make this importable/runnable regardless of invocation style (`python3 file.py`,
+# `-m`, or the worker subprocess below re-invoking this same file directly).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from shopping_agent.catalog import load_catalog
 
@@ -81,19 +87,35 @@ def _model_license_and_size_mb(model_id: str) -> tuple[str, float | None]:
                 license_id = tag.split(":", 1)[1]
                 break
 
-    weight_suffixes = (".safetensors", ".bin", ".onnx", ".pt")
+    # HF repos for these models host several redundant export formats of the
+    # same weights side by side (safetensors, pytorch .bin, onnx, openvino,
+    # quantized variants...). Summing every matching file overcounts "model
+    # size" several times over, so take the single largest top-level weight
+    # file instead -- one format, not every format added together.
+    weight_suffixes = (".safetensors", ".bin")
     siblings = info.siblings or ()
-    sizes = [getattr(s, "size", None) for s in siblings]
-    weight_bytes = sum(
-        size for s, size in zip(siblings, sizes)
-        if size and s.rfilename.endswith(weight_suffixes)
-    )
-    total_bytes = weight_bytes or sum(size for size in sizes if size)
+    top_level_weights = [
+        getattr(s, "size", None)
+        for s in siblings
+        if "/" not in s.rfilename and s.rfilename.endswith(weight_suffixes) and getattr(s, "size", None)
+    ]
+    if top_level_weights:
+        total_bytes = max(top_level_weights)
+    else:
+        all_sizes = [getattr(s, "size", None) for s in siblings if getattr(s, "size", None)]
+        total_bytes = max(all_sizes) if all_sizes else 0
     return license_id, (total_bytes / (1024.0 * 1024.0)) if total_bytes else None
+
+
+QUERY_LATENCY_TRIALS = 10
 
 
 def _run_worker(model_id: str, query_prefix: str, product_texts: list[str], query: str) -> dict:
     from sentence_transformers import SentenceTransformer
+
+    # Warm the local HF cache first, untimed -- otherwise "startup" includes a
+    # one-time network download, not steady-state load-from-cache time.
+    SentenceTransformer(model_id)
 
     start = time.perf_counter()
     model = SentenceTransformer(model_id)
@@ -103,16 +125,20 @@ def _run_worker(model_id: str, query_prefix: str, product_texts: list[str], quer
     vectors = model.encode(product_texts, show_progress_bar=False)
     encode_seconds = time.perf_counter() - encode_start
 
-    query_start = time.perf_counter()
-    model.encode([query_prefix + query], show_progress_bar=False)
-    query_seconds = time.perf_counter() - query_start
+    full_query = query_prefix + query
+    model.encode([full_query], show_progress_bar=False)  # warm-up call, untimed
+    query_times = []
+    for _ in range(QUERY_LATENCY_TRIALS):
+        query_start = time.perf_counter()
+        model.encode([full_query], show_progress_bar=False)
+        query_times.append(time.perf_counter() - query_start)
 
     return {
         "dimensions": int(vectors.shape[1]),
         "startup_seconds": startup_seconds,
         "batch_encode_seconds": encode_seconds,
         "texts_per_second": len(product_texts) / encode_seconds if encode_seconds > 0 else None,
-        "single_query_latency_seconds": query_seconds,
+        "single_query_latency_seconds": statistics.median(query_times),
         "peak_rss_mb": _peak_rss_mb(),
     }
 
