@@ -144,6 +144,7 @@ def choose_attribute(
     allow_wildcard: bool = False,
     use_disagreement: bool = True,
     block_soft_slots: bool = True,
+    allow_repeats: bool = False,
 ) -> str | None:
     """The one attribute to ask about this turn, or None to stop asking.
 
@@ -167,12 +168,9 @@ def choose_attribute(
         for attribute, constraint in state.constraints.items()
         if block_soft_slots or constraint.strength == "hard"
     }
-    unavailable = (
-        set(state.asked_attributes)
-        | set(state.rejected_attributes)
-        | fixed
-        | DEAD_ATTRIBUTES
-    )
+    unavailable = set(state.rejected_attributes) | fixed | DEAD_ATTRIBUTES
+    if not allow_repeats:
+        unavailable |= set(state.asked_attributes)
     available = [a for a in ATTRIBUTE_PRIOR_YIELD if a not in unavailable]
 
     if not available:

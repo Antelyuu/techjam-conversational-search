@@ -46,44 +46,71 @@ The command writes per-session results and aggregate metrics to `results.json`.
 The included weak BM25 starter scores Hit Rate@10 `0.125`, MRR `0.068034`, and
 MTTC `9.81` on the released public set. See `docs/baseline_results.json`.
 
-## Dense Semantic Route
+## Reproducing the submission
 
-The agent fuses a dense semantic route with BM25 lexical search, which adds
-matching for paraphrases and scenario-style messages. It is **on by default**
-and needs no environment variables, so it engages under the official harness's
-plain `Agent(catalog_path)` construction.
+No dependencies and no network:
 
 ```bash
-pip install -r requirements.txt      # sentence-transformers (pulls in torch, numpy)
 python3 -m evaluator.local_evaluator
 ```
 
-The repository includes the prebuilt MiniLM artifact in `data/embeddings/`, so
-the organiser can load dense retrieval without spending startup time rebuilding
-vectors. Run `python3 -m scripts.build_embeddings` only when the frozen
-catalogue or selected model changes; rebuilding replaces the bundled artifact.
+That is the whole reproduction. The agent runs on the standard library, and
+the command above is exactly how the official harness constructs it -- no
+environment variables, plain `Agent(catalog_path)`.
 
-Set `SHOPPING_AGENT_FUSION=weighted` (default) or `rrf` to pick how the two
-routes are blended, and `SHOPPING_AGENT_DENSE=0` to turn the dense route off
-entirely. The model itself is set in `shopping_agent/embedding_config.py`.
-
-Measured on the public set (`docs/experiments/E2-p3-fusion-ablation.md`):
-
-| configuration | TechnicalScore |
+| | |
 |---|---|
-| lexical only | 0.115573 |
-| dense + RRF fusion | 0.145170 |
-| **dense + weighted fusion (default)** | **0.151089** |
+| TechnicalScore | **0.706484** |
+| Hit Rate@10 | 0.830 |
+| MRR | 0.550613 |
+| MTTC | 4.685 |
+| startup | 1.34 s |
+| per-turn latency | 22 ms median, 48 ms p95 |
+| peak RSS | 0.55 GB |
+| model / API / token usage | none |
 
-**Network access:** dependency installation and the first local model download
-need the network. Retrieval uses the bundled vectors and does not reach the
-network after the model is available locally.
+| milestone | TechnicalScore |
+|---|---|
+| starter BM25 | 0.106710 |
+| P2 constraint-aware lexical | 0.115573 |
+| P3 dense + weighted fusion | 0.151089 |
+| P4 clarification + reranker | 0.636663 |
+| **P5 dense retired + disclosed-evidence scoring** | **0.706484** |
 
-**BM25 fallback:** if the dependencies are missing, or the bundled artifact was
-built from a different catalogue than the one loaded, the dense route does not
-engage and the agent serves BM25 lexical results instead. The reason is printed
-to stderr rather than swallowed, so a degraded run is visible rather than just
-scoring lower. The agent never fails because the dense route is unavailable.
+## Dense Semantic Route (off by default since P5)
+
+P3 fused a dense semantic route with BM25 and it was worth +0.0355 at the
+time. P4 then changed what a query is: the customer now answers questions by
+quoting constraint sentences out of the target product's own text, and those
+accumulate across turns. BM25 sharpens on that; a single sentence embedding
+blurs it. Measured after P4, **turning the dense route off is worth +0.0509**
+and wins or ties every scenario
+(`docs/experiments/E5-p5-retrieval-reversal-and-evidence.md`).
+
+| configuration | before clarification (E2) | after clarification (E5) |
+|---|---|---|
+| lexical only | 0.115573 | **0.687598** |
+| dense + RRF | 0.145170 | 0.636669 |
+| dense + weighted | **0.151089** | 0.636663 |
+
+The route, its flag and the prebuilt MiniLM artifact all remain, because the
+finding is about this query distribution rather than about dense retrieval:
+
+```bash
+pip install -r requirements.txt      # sentence-transformers (pulls in torch, numpy)
+SHOPPING_AGENT_DENSE=1 python3 -m evaluator.local_evaluator
+```
+
+`SHOPPING_AGENT_FUSION=weighted` (default) or `rrf` picks the blend, and the
+model is set in `shopping_agent/embedding_config.py`. Run
+`python3 -m scripts.build_embeddings` only when the frozen catalogue or the
+selected model changes.
+
+**BM25 fallback:** when enabled but unavailable -- missing dependencies, or an
+artifact built from a different catalogue -- the route does not engage and the
+agent serves BM25 results instead, printing the reason to stderr rather than
+swallowing it, so a degraded run is visible rather than merely scoring lower.
+The agent never fails because the dense route is unavailable.
 
 ## Agent Interface
 

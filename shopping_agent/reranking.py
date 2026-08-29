@@ -31,6 +31,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from . import evidence
 from .catalog import ProductRecord
 from .contracts import Candidate, Constraint
 from .filtering import SCORED_SEPARATELY, evaluate_price, score_category
@@ -76,6 +77,23 @@ FEATURE_WEIGHTS: dict[str, float] = {
     "dense_rank": 2.0,
     "metadata": 0.25,
     "soft_preferences": 0.1,
+    # P5-T3, and the largest single feature in the table by a wide margin.
+    #
+    # MEASURED (E5), dense route off, sweeping this weight alone:
+    #
+    #   weight  0.0      2.0      4.0      8.0      12.0     16.0+
+    #   MRR     0.5127   0.5263   0.5438   0.5479   0.5506   0.5506
+    #   score   0.6876   0.6960   0.7017   0.7057   0.7065   0.7065
+    #
+    # Flat to six decimals from 12 upward: by then coverage of the customer's
+    # quoted constraints decides the order outright and the rest of the table
+    # only breaks ties. 12.0 is the first point of that plateau.
+    #
+    # A high weight is safe rather than reckless here. If a disclosure matches
+    # nothing -- a different hidden evaluator, a less verbatim customer -- the
+    # feature scores ~0 for every candidate and the ordering falls back to the
+    # features beneath it. The failure mode is silence, not noise.
+    "constraint_evidence": 12.0,
 }
 
 # Converts a 1-based route rank to a 0-1 value.
@@ -174,8 +192,13 @@ def score_candidate(
     candidate: Candidate,
     product: ProductRecord,
     constraints: dict[str, Constraint],
+    disclosures: list[str] | None = None,
 ) -> RerankedCandidate:
-    """Score one candidate against the feature checklist, in order."""
+    """Score one candidate against the feature checklist, in order.
+
+    `disclosures` are the constraint sentences the customer has quoted back
+    in answer to our questions. Omitted, the evidence feature scores 0 for
+    every candidate and cannot reorder anything."""
     category = constraints.get("category")
     if category is None:
         # A constraint the customer never gave earns no credit. Constant
@@ -198,6 +221,7 @@ def score_candidate(
         "dense_rank": _rank_value(candidate, "dense"),
         "metadata": metadata_value,
         "soft_preferences": _share(candidate.matched_soft_preferences, constraints, "soft"),
+        "constraint_evidence": evidence.coverage(product, disclosures or []),
     }
 
     contributions = tuple(
@@ -216,6 +240,7 @@ def rerank(
     products: dict[str, ProductRecord],
     constraints: dict[str, Constraint],
     limit: int,
+    disclosures: list[str] | None = None,
 ) -> list[RerankedCandidate]:
     """Order the pool by the deterministic scorer and keep the top `limit`.
 
@@ -224,7 +249,7 @@ def rerank(
     arbitrarily.
     """
     scored = [
-        score_candidate(candidate, products[candidate.parent_asin], constraints)
+        score_candidate(candidate, products[candidate.parent_asin], constraints, disclosures)
         for candidate in candidates
         if candidate.parent_asin in products
     ]

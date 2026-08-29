@@ -32,7 +32,47 @@ _DEFAULT_QUESTION = "Could you tell me a little more about what you need?"
 # by the pool retrieval actually built (see retrieve()).
 RERANK_POOL = 50
 
+# P5-T1: the dense route is off by default, reversing P3's decision on
+# measurement rather than on preference.
+#
+# P3 adopted dense fusion because it was worth +0.0355 over lexical alone
+# (0.1156 -> 0.1511) when every query was a single short opening message. P4
+# changed what a query is: the customer now answers questions by quoting
+# constraint sentences out of the target product's own features, and those
+# accumulate. BM25 sharpens on that -- its recall of the target in a
+# 50-candidate pool climbs from 0.38 at turn 1 to 0.74 by turn 3 -- while the
+# dense route stays flat near 0.30, because a fixed-width sentence embedding
+# averages a growing paragraph toward the corpus mean.
+#
+# MEASURED (E5): turning the route off is worth +0.050935, and it wins or
+# ties every scenario. Down-weighting it instead does not work; there is a
+# cliff rather than a slope, because retrieval takes the *union* of both
+# routes' candidates and min-max normalization floors the lexical tail at
+# 0.0, so dense-only candidates displace real ones even at 5% weight.
+#
+# Still switchable with SHOPPING_AGENT_DENSE=1. The artifact and the code
+# stay in the repository: the finding is about this query distribution, and a
+# private set that asks fewer questions would move the balance back.
+DENSE_BY_DEFAULT = False
+
 TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
+
+# How many distinct query terms reach BM25.
+#
+# This looked like a silent-truncation bug of the kind P4 found twice, and it
+# is not. 8.2% of turns do exceed it, dropping a median of 11 terms and up to
+# 42 -- but raising it to 60, 80, 120 or 400 reproduces the composite to six
+# decimal places (E5). The reason is that build_query_text() ends with the
+# latest raw message, which for an answered question is the same disclosure
+# already carried earlier in the query, so the terms a cap discards are
+# duplicates. Left at 40, now with a measurement behind it rather than a
+# guess.
+QUERY_TERM_LIMIT = 40
+
+# BM25 column weights, in the order the FTS table declares them:
+# parent_asin, title, categories, features, details, store, description.
+# parent_asin is unindexed and always 0.0.
+FIELD_WEIGHTS = "0.0, 6.0, 4.0, 2.5, 2.5, 1.5, 1.0"
 STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from",
     "i", "in", "is", "it", "me", "my", "of", "on", "or", "please", "some",
@@ -76,16 +116,21 @@ def _env_flag(name: str, default: bool) -> bool:
 
 class Agent:
     """Stateful multi-turn agent: BM25 retrieval over a cumulative,
-    session-aware query built from accumulated conversation state,
-    optionally fused with a dense semantic route.
+    session-aware query built from accumulated conversation state, reordered
+    by a deterministic scorer that leads on how completely a candidate
+    accounts for what the customer has actually disclosed.
 
-    The dense route is on by default, because the official harness
-    constructs the agent as Agent(catalog_path) with no arguments and no
-    environment variables -- anything opt-in would never run there. It
-    still engages only when its bundled artifact and dependencies are
-    present; otherwise the agent falls back to BM25 lexical search and
-    says so on stderr. Disable it with SHOPPING_AGENT_DENSE=0, and pick
-    the blend with SHOPPING_AGENT_FUSION=rrf|weighted."""
+    Each turn also returns one clarifying question, which is where most of
+    this system's score comes from -- the simulator discloses a hidden
+    constraint only when asked.
+
+    The dense semantic route is **off** by default as of P5, on measurement:
+    it helped when queries were single short messages and hurts now that they
+    carry quoted product text (see DENSE_BY_DEFAULT). Re-enable it with
+    SHOPPING_AGENT_DENSE=1, and pick the blend with
+    SHOPPING_AGENT_FUSION=rrf|weighted. When enabled it still engages only if
+    its artifact and dependencies are present, and otherwise falls back to
+    BM25 and says so on stderr."""
 
     def __init__(
         self,
@@ -97,6 +142,7 @@ class Agent:
         enable_clarification: bool | None = None,
         enable_reranker: bool | None = None,
         block_soft_slots: bool | None = None,
+        allow_repeats: bool | None = None,
         route_weights: dict[str, float] | None = None,
     ) -> None:
         self.catalog_path = Path(catalog_path)
@@ -115,6 +161,15 @@ class Agent:
             enable_reranker = _env_flag("SHOPPING_AGENT_RERANK", default=True)
         if block_soft_slots is None:
             block_soft_slots = _env_flag("SHOPPING_AGENT_BLOCK_SOFT", default=False)
+        if allow_repeats is None:
+            # MEASURED and rejected (E5). Re-asking a high-yield attribute
+            # until the card is drained sounds strictly more informative, and
+            # costs 0.0078 composite -- all of it in Intent Override
+            # (0.800 -> 0.767), where hits cannot register before the override
+            # fires and a repeated question crowds out the diversification
+            # that finds the new intent. E3 left this open; it is closed now.
+            allow_repeats = _env_flag("SHOPPING_AGENT_REPEAT", default=False)
+        self.allow_repeats = allow_repeats
         self.allow_wildcard = allow_wildcard
         self.use_disagreement = use_disagreement
         self.enable_clarification = enable_clarification
@@ -124,7 +179,7 @@ class Agent:
         self._warned: set[str] = set()
 
         if enable_dense is None:
-            enable_dense = _env_flag("SHOPPING_AGENT_DENSE", default=True)
+            enable_dense = _env_flag("SHOPPING_AGENT_DENSE", default=DENSE_BY_DEFAULT)
         self.fusion_method = _resolve_fusion(
             fusion_method or os.environ.get("SHOPPING_AGENT_FUSION")
         )
@@ -211,7 +266,13 @@ class Agent:
             # already a valid ranking, so fall back to it rather than raising
             # into respond() and returning nothing (P4-T4).
             try:
-                reranked = rerank(candidates, self.products, request.state.constraints, top_k)
+                reranked = rerank(
+                    candidates,
+                    self.products,
+                    request.state.constraints,
+                    top_k,
+                    request.state.disclosed_text,
+                )
                 recommendations = [
                     {"parent_asin": item.parent_asin, "score": item.score} for item in reranked
                 ]
@@ -235,6 +296,7 @@ class Agent:
                     allow_wildcard=self.allow_wildcard,
                     use_disagreement=self.use_disagreement,
                     block_soft_slots=self.block_soft_slots,
+                    allow_repeats=self.allow_repeats,
                 )
             except Exception as error:
                 self._warn_once(f"clarification policy failed, asking nothing: {error}")
@@ -260,12 +322,12 @@ class Agent:
         print(f"[shopping_agent] {message}", file=sys.stderr)
 
     def _lexical_search(self, query_text: str, limit: int) -> list[tuple[str, float]]:
-        unique_terms = list(dict.fromkeys(_terms(query_text)))[:40]
+        unique_terms = list(dict.fromkeys(_terms(query_text)))[:QUERY_TERM_LIMIT]
         expression = " OR ".join(f'"{term}"' for term in unique_terms)
         if not expression:
             return []
         rows = self.connection.execute(
-            "SELECT parent_asin, bm25(products, 0.0, 6.0, 4.0, 2.5, 2.5, 1.5, 1.0) AS cost "
+            f"SELECT parent_asin, bm25(products, {FIELD_WEIGHTS}) AS cost "
             "FROM products WHERE products MATCH ? ORDER BY cost LIMIT ?",
             (expression, limit),
         ).fetchall()

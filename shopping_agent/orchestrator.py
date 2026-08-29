@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from . import clarification
+from . import evidence
 from . import intent as intent_module
 from . import state as state_module
 from .contracts import SearchRequest, SessionState
@@ -118,7 +119,11 @@ class ConversationOrchestrator:
         # persist its filler into every later query.
         content, substitutions = _LEAD_IN_RE.subn("", user_message.strip())
         if content and (substitutions or asked is not None):
-            state.disclosed_text.append(content)
+            # Kept split rather than whole: the simulator joins several quoted
+            # constraints with "; ", and P5's evidence feature scores coverage
+            # of each one separately. Query text is unaffected -- it joins the
+            # parts back with a space.
+            state.disclosed_text.extend(evidence.split_disclosures(content))
 
     @staticmethod
     def record_question(state: SessionState, attribute: str | None) -> None:

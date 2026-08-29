@@ -178,13 +178,16 @@ class LeadInStrippingTest(unittest.TestCase):
         message = "I'm looking for Shoes. A key requirement is: 100% Leather."
         self.assertEqual(self.absorb(message, asked=None), ["100% Leather."])
 
+    # P5 stores each quoted constraint separately rather than as one blob, so
+    # the evidence feature can score coverage of each. The framing is still
+    # what gets stripped; only the granularity of what is kept changed.
     def test_a_disclosure_keeps_only_the_constraints(self):
         message = "For that, what matters is: 100% Cotton; Imported."
-        self.assertEqual(self.absorb(message), ["100% Cotton; Imported."])
+        self.assertEqual(self.absorb(message), ["100% Cotton", "Imported."])
 
     def test_a_colon_inside_a_value_is_not_treated_as_framing(self):
         message = "For that, what matters is: color: black; Imported."
-        self.assertEqual(self.absorb(message), ["color: black; Imported."])
+        self.assertEqual(self.absorb(message), ["color: black", "Imported."])
 
     def test_an_empty_reply_contributes_nothing(self):
         self.assertEqual(
