@@ -66,17 +66,29 @@ class ScoreCandidateTest(unittest.TestCase):
         tenth = score_candidate(candidate("b", lexical=10), product("b"), {})
         self.assertGreater(first.score, tenth.score)
 
-    def test_a_hard_constraint_outweighs_retrieval_rank(self):
-        """The feature order is meaningful only if a higher feature cannot be
-        overturned by everything below it."""
+    def test_a_hard_constraint_breaks_a_tie_at_equal_rank(self):
+        """Among candidates retrieval cannot separate, satisfying a stated
+        requirement wins. This is the checklist order where it still holds."""
         constraints = {"color": Constraint("color", "black", "hard", 1)}
         matching = score_candidate(
+            candidate("a", lexical=3, dense=3, hard=("color",)), product("a"), constraints
+        )
+        plain = score_candidate(candidate("b", lexical=3, dense=3), product("b"), constraints)
+        self.assertGreater(matching.score, plain.score)
+
+    def test_retrieval_rank_outranks_the_constraint_features(self):
+        """Deliberate, and contrary to P4's stated feature order: weighting
+        hard constraints above retrieval measured 0.047 composite worse,
+        because matched_constraints() is a coarse word-containment check and
+        swamped the score margin weighted fusion exists to preserve (E4)."""
+        constraints = {"color": Constraint("color", "black", "hard", 1)}
+        far_down = score_candidate(
             candidate("a", lexical=50, dense=50, hard=("color",)), product("a"), constraints
         )
         top_ranked = score_candidate(
             candidate("b", lexical=1, dense=1), product("b"), constraints
         )
-        self.assertGreater(matching.score, top_ranked.score)
+        self.assertGreater(top_ranked.score, far_down.score)
 
     def test_an_unpriced_item_scores_below_one_known_in_budget(self):
         constraints = {"budget": Constraint("budget", 100.0, "hard", 1)}

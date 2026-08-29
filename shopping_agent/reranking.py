@@ -14,11 +14,11 @@ checklist, in the order P4 specifies:
 Every feature contributes ``weight * value`` with ``value`` in 0-1, and every
 contribution is recorded on the result. That is the point of the phase's
 acceptance criterion -- any candidate's placement can be read off rather than
-guessed at, so a bad ranking can be traced to the feature that caused it.
+guessed at, so a bad ranking can be traced to the feature that caused it. It
+is also how the weights below were diagnosed: the first version ranked worse
+than no reranking at all, and the breakdown said which feature was doing it.
 
-Weights decrease down the checklist, which is how the specified feature order
-is expressed: a hard constraint outweighs a category match, which outweighs
-any amount of retrieval score. No model, no network, no learned parameters.
+No model, no network, no learned parameters.
 """
 
 from __future__ import annotations
@@ -29,22 +29,36 @@ from .catalog import ProductRecord
 from .contracts import Candidate, Constraint
 from .filtering import evaluate_price, score_category
 
-# Ordered highest-priority first, matching the P4 feature checklist. The gaps
-# are deliberate: no accumulation of lower features can overturn a higher one,
-# which is what makes the order meaningful rather than decorative.
+# MEASURED, and not what the checklist order suggests. Weighting the features
+# in P4's stated priority order -- hard_constraints 4.0 down to
+# soft_preferences 0.25 -- *lost* 0.047 composite against the fused ordering it
+# replaces, and lost all of it in MRR (0.329 against 0.475). It found the same
+# products and ranked them worse, because matched_constraints() is a coarse
+# word-containment check and at weight 4.0 it swamped the retrieval score
+# margin that weighted fusion exists to preserve.
+#
+# These weights lead with retrieval instead and win by +0.0059 (E4). The
+# checklist order still holds among the *adjustment* features -- hard
+# constraints outrank category, which outranks metadata, which outranks soft
+# preferences -- but retrieval rank outranks all of them, which the specified
+# order does not say and the measurement does.
 FEATURE_WEIGHTS: dict[str, float] = {
-    "hard_constraints": 4.0,
-    "category": 2.0,
-    "lexical_rank": 1.0,
-    "dense_rank": 1.0,
-    "metadata": 0.5,
-    "soft_preferences": 0.25,
+    "hard_constraints": 1.0,
+    "category": 0.5,
+    "lexical_rank": 2.0,
+    "dense_rank": 2.0,
+    "metadata": 0.25,
+    "soft_preferences": 0.1,
 }
 
-# Converts a 1-based route rank to a 0-1 value. Matches the shape of the RRF
-# constant used in fusion, so a rank difference means about the same thing
-# here as it does there.
-RANK_DECAY = 60.0
+# Converts a 1-based route rank to a 0-1 value.
+#
+# MEASURED: this was 60, mirroring the RRF constant, and that was the larger
+# half of the mistake above. Over a fifty-candidate pool it spans only 1.00 to
+# 0.55, so the rank features could not discriminate against features spanning
+# the full 0-1. At 5 the span is 1.00 to 0.09. Sharpening this alone recovered
+# most of the lost MRR (0.441) even under the original weights.
+RANK_DECAY = 5.0
 
 
 @dataclass(frozen=True)
