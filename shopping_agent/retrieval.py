@@ -23,6 +23,7 @@ FUSION_WEIGHTED = "weighted"
 # session on HitRate, so re-run scripts/fusion_ablation.py if retrieval inputs
 # change materially -- notably once P4 clarification alters the query mix.
 DEFAULT_FUSION = FUSION_WEIGHTED
+FUSION_METHODS = frozenset({FUSION_RRF, FUSION_WEIGHTED})
 
 # Standard RRF constant: damps the gap between the very top ranks so one
 # route cannot dominate purely by being confident about its #1.
@@ -48,16 +49,22 @@ FUSED_BOOST_SCALE = 0.1
 
 
 def _minmax_normalize(scores: dict[str, float]) -> dict[str, float]:
-    """Map scores onto 0-1. A route that gave every candidate the same score
-    carries no ranking signal, so it collapses to a constant rather than
-    dividing by zero."""
+    """Map scores onto 0-1.
+
+    A route with no spread (one candidate, or several tied) carries no
+    ranking signal, but it did still return these candidates. Collapsing to
+    1.0 rather than 0.0 keeps that endorsement distinguishable from the 0.0
+    that _weighted_fusion gives a candidate the route never returned at all.
+    Otherwise a hard filter that leaves a route one strong survivor would
+    give that survivor no credit and tie it with the worst hit of the other
+    route."""
     if not scores:
         return {}
     lowest = min(scores.values())
     highest = max(scores.values())
     span = highest - lowest
     if span <= 0:
-        return {key: 0.0 for key in scores}
+        return {key: 1.0 for key in scores}
     return {key: (value - lowest) / span for key, value in scores.items()}
 
 
