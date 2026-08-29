@@ -14,7 +14,7 @@ experiment_id: "E4"
 phase: "P4"
 hypothesis: "An explicit per-candidate feature checklist ranks better than the fused score plus boosts it replaces; and weighted fusion still beats RRF once clarification changes the query distribution."
 base_commit: "d2bb995"
-candidate_commit: "5d32397"
+candidate_commit: "adcde1a"
 dataset: "full public set (200 labeled sessions)"
 clarification: "soft_plus_wildcard (the E3 default)"
 overall_metrics:

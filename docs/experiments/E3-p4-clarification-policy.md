@@ -66,7 +66,7 @@ every query since P1, and, once P4 began asking questions, a permanently blocked
 `size` slot, because the policy will not ask about an attribute that already
 looks fixed.
 
-Fixed in `6141f7c`; sizes that are words on their own still match bare, while
+Fixed in `4dd25de`; sizes that are words on their own still match bare, while
 `s`/`m`/`l` now need an explicit size cue. Worth **+0.011** on its own (the
 `no_questions` row below is 0.162275 against P3's recorded 0.151089).
 
@@ -97,7 +97,7 @@ experiment_id: "E3"
 phase: "P4"
 hypothesis: "Asking one question per turn converts turns 2-10 from dead weight into information gain, lifting HitRate and MTTC together; candidate disagreement improves the choice of question over a fixed prior; and the \"other\" wildcard is worth less than it appears."
 base_commit: "d2bb995"
-candidate_commit: "871913d"
+candidate_commit: "394b733"
 dataset: "full public set (200 labeled sessions)"
 reranker: "disabled throughout, so this ablation moves one variable"
 overall_metrics:
