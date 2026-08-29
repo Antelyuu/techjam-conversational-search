@@ -3,11 +3,11 @@
 Decision record for the P3 decision gate ("Compare no dense route, at least two
 models... Do not choose by reputation alone").
 
-> **Correction (superseded in part by E2).** The bge-small run recorded here was
-> invalid: its dense route never engaged, so the figures originally attributed to
-> bge-small are in fact the lexical-only control. See "The bge run was invalid"
-> below. MiniLM remains the selected model, but on narrower evidence than first
-> claimed -- bge-small has still never actually been measured.
+> **Correction history.** The bge-small figures first recorded here were from a run
+> whose dense route never engaged -- they were in fact the lexical-only control
+> (see "A discarded bge run" below). Corrected bge-small results were supplied
+> afterwards and are the ones recorded below. **MiniLM remains the selected model,
+> now on a genuine measured comparison rather than by default.**
 
 ```yaml
 experiment_id: "E1"
@@ -21,7 +21,7 @@ overall_metrics:
   original_bm25_starter: {hit_rate_at_10: 0.125, mrr: 0.068034, mttc: 9.81, efficiency: 0.119, technical_score: 0.106710}
   lexical_only_P1_P2:    {hit_rate_at_10: 0.135, mrr: 0.074575, mttc: 9.715, efficiency: 0.1285, technical_score: 0.115573}
   all-MiniLM-L6-v2_rrf:  {hit_rate_at_10: 0.175, mrr: 0.079234, mttc: 9.305, efficiency: 0.1695, technical_score: 0.145170}
-  bge-small-en-v1.5:     "NOT MEASURED - see correction"
+  bge-small-en-v1.5_rrf: {hit_rate_at_10: 0.160, mrr: 0.069109, mttc: 9.450, efficiency: 0.1550, technical_score: 0.131733}
 scenario_metrics:
   lexical_only_P1_P2:
     buying:          {n: 80, hit_rate_at_10: 0.2375,   mrr: 0.132758, mttc: 8.625}
@@ -33,6 +33,11 @@ scenario_metrics:
     browsing:        {n: 80, hit_rate_at_10: 0.100,    mrr: 0.034340, mttc: 10.000}
     intent_override: {n: 30, hit_rate_at_10: 0.133333, mrr: 0.074167, mttc: 10.033333}
     boundary:        {n: 10, hit_rate_at_10: 0.300,    mrr: 0.042063, mttc: 8.000}
+  bge-small-en-v1.5_rrf:
+    buying:          {n: 80, hit_rate_at_10: 0.225,    mrr: 0.099717, mttc: 8.750}
+    browsing:        {n: 80, hit_rate_at_10: 0.1125,   mrr: 0.039306, mttc: 9.8875}
+    intent_override: {n: 30, hit_rate_at_10: 0.100,    mrr: 0.075000, mttc: 10.300}
+    boundary:        {n: 10, hit_rate_at_10: 0.200,    mrr: 0.045000, mttc: 9.000}
 performance:
   startup_seconds: null       # T1's numbers were measured by the pre-fix benchmark
   per_turn_latency_ms: null   # and the corrected benchmark was never re-run
@@ -41,50 +46,61 @@ model_api: {model: "sentence-transformers/all-MiniLM-L6-v2", network_required: f
 newly_won_sessions: []
 newly_lost_sessions: []
 known_regressions: []
-decision: "keep MiniLM; bge-small remains untested"
+decision: "keep MiniLM - beats bge-small by +0.013437 composite on matched RRF settings"
 ```
-
-## The bge run was invalid
-
-The fusion ablation (E2) measured the lexical-only control at exactly the values
-previously recorded for bge-small -- all five aggregate metrics and all sixteen
-per-scenario metrics identical, MRR matching to six decimal places across 200
-sessions:
-
-| metric | reported as "bge-small" | measured lexical-only |
-|---|---|---|
-| hit_rate_at_10 | 0.135 | 0.135 |
-| mrr | 0.074575 | 0.074575 |
-| mttc | 9.715 | 9.715 |
-| technical_score | 0.115573 | 0.115573 |
-| browsing mrr | 0.008681 | 0.008681 |
-
-Two different retrieval systems cannot produce identical MRR to six decimals over
-200 sessions. The bge branch's dense route did not engage during that run -- almost
-certainly because its embedding artifact had not been built yet (it was committed
-later, in `a59543a`), so `load_dense_retriever()` returned `None` and the agent
-silently served BM25 results.
-
-This is precisely the silent-failure mode that `dc99b0f` now guards against by
-printing the fallback reason to stderr. Had that warning existed, the invalid run
-would have announced itself instead of being recorded as a model comparison.
 
 ## Decision
 
-**Selected `sentence-transformers/all-MiniLM-L6-v2`**, but on narrower grounds than
-originally recorded. What is actually established:
+**Selected `sentence-transformers/all-MiniLM-L6-v2`.** On matched settings (RRF
+fusion), it beats bge-small on every aggregate metric:
 
-- MiniLM's dense route plus fusion beats the lexical-only control by a wide margin
-  (+0.030 composite with RRF, +0.036 with weighted fusion -- see E2), reproduced
-  independently twice.
-- **bge-small has never been measured.** The comparison the decision gate asked for
-  has not been performed.
+| config | HitRate@10 | MRR | MTTC | technical_score |
+|---|---|---|---|---|
+| lexical only | 0.135 | 0.074575 | 9.715 | 0.115573 |
+| bge-small + RRF | 0.160 | 0.069109 | 9.450 | 0.131733 |
+| **MiniLM + RRF** | **0.175** | **0.079234** | **9.305** | **0.145170** |
+| **MiniLM + weighted** | **0.180** | **0.088964** | **9.280** | **0.151089** |
 
-MiniLM is retained because it is the configuration that demonstrably works, not
-because it was shown superior to bge-small. Re-running bge-small is cheap now that
-its artifact exists (`a59543a`) and `scripts/fusion_ablation.py` automates the
-comparison; it is worth doing before the model choice is described as evidence-based
-in the final report.
+MiniLM leads bge-small by **+0.013437** composite under RRF, winning HitRate, MRR and
+MTTC simultaneously rather than trading between them. Both models are 384-dimensional
+and permissively licensed (Apache-2.0, MIT), so neither dimension nor license
+separated them.
+
+The retrieval-tuned model losing to the general-purpose one is why the gate's "do not
+choose by reputation alone" instruction mattered.
+
+### Two caveats on bge-small
+
+**It is the better model for Browsing.** bge-small beats MiniLM on the paraphrase-heavy
+scenario (0.1125 vs 0.100) and improves it most against the lexical control (+0.075).
+That is the behaviour its retrieval tuning predicts. It loses overall because it gives
+back more elsewhere -- Buying -0.0125 and Intent Override -0.0333 against lexical-only.
+This matters for P4: once clarification lets Browsing queries gain content, the query
+distribution changes and the model comparison is worth re-running rather than assumed
+settled.
+
+**Its MRR is worse than no dense route at all** (0.069109 vs the lexical control's
+0.074575, -0.005466). bge-small surfaces more targets but ranks them lower than BM25
+alone did. MiniLM does not have this problem (0.079234, above the control).
+
+**Not measured:** bge-small under weighted fusion. To overtake MiniLM+weighted it
+would need +0.019 over its own RRF score, roughly three times the gain weighted gave
+MiniLM (+0.006), so this is unlikely to change the decision -- but it is untested.
+
+## A discarded bge run
+
+The bge figures first recorded here (0.135 / 0.074575 / 9.715 / 0.115573) were later
+found to match the lexical-only control **exactly** -- all five aggregate and all
+sixteen per-scenario metrics, MRR to six decimal places across 200 sessions. Two
+different retrieval systems cannot do that. That run's dense route never engaged,
+most likely because its embedding artifact had not been built yet (committed later in
+`a59543a`), so `load_dense_retriever()` returned `None` and the agent silently served
+BM25 results.
+
+Recorded here because it is the exact failure mode `dc99b0f` now guards against: the
+fallback reason is printed to stderr, so a run like that announces itself instead of
+being mistaken for a model comparison. Corrected bge results were supplied afterwards
+and are the ones used above.
 
 ## Why Browsing is still weak (not a model problem)
 
