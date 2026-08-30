@@ -301,6 +301,7 @@ class Agent:
                     request.state.constraints,
                     top_k,
                     prepared=prepared,
+                    stated_category=request.state.stated_category,
                 )
                 recommendations = [
                     {"parent_asin": item.parent_asin, "score": item.score} for item in reranked

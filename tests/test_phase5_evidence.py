@@ -117,23 +117,28 @@ class EvidenceFeatureTest(unittest.TestCase):
         self.assertEqual(by_feature["constraint_evidence"], 0.0)
         self.assertEqual(a.score, b.score)
 
-    def test_the_evidence_features_lead_the_table(self):
-        """P5 pinned constraint_evidence as the single largest weight. P6's
-        slot_evidence displaced it on measurement (+0.0316), so the invariant
-        worth holding is the general one the numbers actually support: what
-        the customer disclosed outranks every structural feature, and the
-        sharper evidence feature outranks the looser one."""
+    # What the customer actually told us, however it reached us: the
+    # constraints they quoted (the three evidence features) and the category
+    # they named (category_exact). Everything else is generic retrieval and
+    # constraint machinery.
+    DISCLOSURE_FEATURES = frozenset({
+        "slot_evidence", "constraint_evidence", "phrase_evidence", "category_exact",
+    })
+
+    def test_what_the_customer_said_outranks_the_structural_features(self):
+        """P5 pinned constraint_evidence as the single largest weight. P6
+        displaced it twice -- slot_evidence (+0.0316) then category_exact
+        (+0.0475) -- so the invariant worth holding is the general one the
+        numbers support across all three phases: signals carrying what the
+        customer actually told us outrank every structural feature, and the
+        sharpest of them leads."""
         ordered = sorted(FEATURE_WEIGHTS, key=FEATURE_WEIGHTS.get, reverse=True)
         self.assertEqual(ordered[0], "slot_evidence")
-        structural = {
-            name for name in FEATURE_WEIGHTS if not name.endswith("evidence")
-        }
-        weakest_evidence = min(
-            weight for name, weight in FEATURE_WEIGHTS.items()
-            if name.endswith("evidence")
-        )
+        structural = set(FEATURE_WEIGHTS) - self.DISCLOSURE_FEATURES
+        self.assertTrue(self.DISCLOSURE_FEATURES <= set(FEATURE_WEIGHTS))
         self.assertGreater(
-            weakest_evidence, max(FEATURE_WEIGHTS[name] for name in structural)
+            min(FEATURE_WEIGHTS[name] for name in self.DISCLOSURE_FEATURES),
+            max(FEATURE_WEIGHTS[name] for name in structural),
         )
 
 

@@ -28,6 +28,9 @@ class ProductRecord:
     # intent card, as whole field values rather than substrings. See
     # shopping_agent/slots.py for what that buys and why it is exact.
     card_values: frozenset[str] = frozenset()
+    # The exact category string the customer is given for this product,
+    # as the simulator derives it. Compared verbatim, not by overlap.
+    coarse_category: str = ""
 
 
 def flatten_field(value: object) -> str:
@@ -87,6 +90,7 @@ def normalize_product(raw: dict) -> ProductRecord:
         price_is_lower_bound=price_is_lower_bound,
         searchable_text=searchable_text,
         card_values=slots.card_values(raw),
+        coarse_category=slots.coarse_category(raw.get("categories")),
     )
 
 

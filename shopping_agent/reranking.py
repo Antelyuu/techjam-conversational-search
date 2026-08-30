@@ -183,6 +183,38 @@ FEATURE_WEIGHTS: dict[str, float] = {
     # every candidate scores 0.0, and the table beneath decides. The failure
     # mode is silence, not noise.
     "slot_evidence": 16.0,
+    # P6-T3. The `category` feature above measures 0.0 and this one is worth
+    # +0.0475, and they are nominally about the same thing. The difference is
+    # exactness, and it is the whole story.
+    #
+    # `category` asks whether the candidate's text overlaps a category *word*
+    # the slot extractor recognized ("shoes", "boots"). Retrieval already
+    # applies that same boost when building the pool, so re-applying it
+    # reorders nothing -- which is why it measured flat and stayed at 0.0.
+    #
+    # This one asks whether the candidate reproduces the exact category string
+    # the customer was handed. The opening line states
+    # coarse_category(target.categories) verbatim, in every scenario, on turn
+    # 1 -- and for Browsing it is the *only* thing ever stated before a
+    # question is answered. A median of just 38% of the 250-candidate pool
+    # reproduces it, so agreement removes about three fifths of the field for
+    # free, from the first turn, in all 200 sessions.
+    #
+    # MEASURED (E8), sweeping this weight alone:
+    #
+    #   weight  0.0       1.0       2.0       4.0       8.0       16.0
+    #   score   0.881931  0.926451  0.926651  0.929026  0.929426  0.929426
+    #   HitRate 0.965     0.990     0.990     0.990     0.990     0.990
+    #   MRR     0.836770  0.906171  0.906171  0.912421  0.912421  0.912421
+    #   MTTC    3.580     3.020     3.010     2.985     2.965     2.965
+    #
+    # Flat to six decimals from 8 upward; 8.0 is the first point of that
+    # plateau. Misses fall from 7 to 2, and all three metrics move together.
+    #
+    # Fails quiet like the evidence features: a customer who never states a
+    # category, or states one this catalogue cannot reproduce, leaves
+    # stated_category None and the feature scores 0.0 for every candidate.
+    "category_exact": 8.0,
 }
 
 # Converts a 1-based route rank to a 0-1 value.
@@ -362,6 +394,7 @@ def score_candidate(
     disclosure_tokens: list[frozenset[str]] | None = None,
     disclosure_phrases: list[tuple[str, int, bool]] | None = None,
     slot_terms: list[tuple[str, float]] | None = None,
+    stated_category: str | None = None,
 ) -> RerankedCandidate:
     """Score one candidate against the feature checklist, in order.
 
@@ -413,6 +446,11 @@ def score_candidate(
             evidence.phrase_text(product), disclosure_phrases
         ),
         "slot_evidence": _slot_value(product, slot_terms),
+        "category_exact": (
+            1.0
+            if stated_category and product.coarse_category == stated_category
+            else 0.0
+        ),
     }
 
     contributions = tuple(
@@ -433,6 +471,7 @@ def rerank(
     limit: int,
     disclosures: list[str] | None = None,
     prepared: DisclosureEvidence | None = None,
+    stated_category: str | None = None,
 ) -> list[RerankedCandidate]:
     """Order the pool by the deterministic scorer and keep the top `limit`.
 
@@ -450,6 +489,7 @@ def rerank(
             disclosure_tokens=prepared.tokens,
             disclosure_phrases=prepared.phrases,
             slot_terms=prepared.slot_terms,
+            stated_category=stated_category,
         )
         for candidate in candidates
         if candidate.parent_asin in products

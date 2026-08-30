@@ -46,6 +46,9 @@ class SessionState:
     disclosed_text: list[str] = field(default_factory=list)
     # The attribute asked on the previous turn, still awaiting an answer.
     pending_attribute: str | None = None
+    # The coarse category the opening line named, verbatim. Set once, on
+    # turn 1; the customer never restates it and never contradicts it.
+    stated_category: str | None = None
 
 
 @dataclass(frozen=True)

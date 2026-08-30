@@ -80,6 +80,68 @@ _COLOR_RE = re.compile(
 _CARD_FIELDS = ("title", "features", "details", "description", "categories", "store")
 
 
+# The categories the generator refuses to describe a product by, because they
+# are true of the whole catalogue and would name every session the same thing.
+_GENERIC_CATEGORIES = frozenset(
+    {"clothing", "clothing shoes & jewelry", "clothing, shoes & jewelry"}
+)
+_FALLBACK_CATEGORY = "clothing item"
+
+# The opening line, which states the coarse category verbatim in every
+# scenario before going on to whatever else it carries:
+#
+#   "I'm looking for {category}, but I'm still exploring."
+#   "I'm looking for {category}. A key requirement is: {constraint}."
+#   "I'm looking for {category}. {old_value}"
+#
+# The category never contains a comma -- coarse_category() splits on commas
+# and rejoins with spaces -- so the first ", but" or sentence break ends it.
+_STATED_CATEGORY_RE = re.compile(
+    r"^\s*i'?m looking for\s+(.+?)\s*(?:,\s*but\b|\.(?:\s|$)|$)", re.IGNORECASE
+)
+
+
+def coarse_category(value: object) -> str:
+    """The category string the customer will be given for this product.
+
+    The generator takes the last two comma-separated parts of the raw
+    `categories` field, minus the catalogue-wide ones, and joins them with a
+    space. Reproduced here because *exact* agreement is a far sharper test
+    than the word overlap score_category() does: the pool that BM25 returns
+    for an opening message shares the target's exact category for a median of
+    38% of its candidates, so agreement narrows the field about 2.6x, and it
+    is available from turn 1 in every session -- including Browsing, where it
+    is the only thing the customer has said.
+    """
+    if value is None or value == "":
+        values: list[object] = []
+    elif isinstance(value, list):
+        values = list(value)
+    else:
+        values = [value]
+    cleaned: list[str] = []
+    for value in values:
+        for part in str(value).split(","):
+            part = part.strip()
+            if part and part.lower() not in _GENERIC_CATEGORIES:
+                cleaned.append(part)
+    return " ".join(cleaned[-2:]) if cleaned else _FALLBACK_CATEGORY
+
+
+def stated_category(message: str) -> str | None:
+    """The category the opening line names, or None if this is not one.
+
+    Returns the text verbatim: the generator emits the category with its
+    original capitalization and the comparison is exact, so normalizing here
+    would only make the two sides disagree.
+    """
+    match = _STATED_CATEGORY_RE.match(message or "")
+    if match is None:
+        return None
+    value = match.group(1).strip()
+    return value or None
+
+
 def clean_value(value: str, limit: int = CARD_LIMIT) -> str:
     """Whitespace-collapse, trim edge punctuation, then clip -- in that order.
 

@@ -5,6 +5,7 @@ import re
 from . import clarification
 from . import evidence
 from . import intent as intent_module
+from . import slots
 from . import state as state_module
 from .contracts import SearchRequest, SessionState
 
@@ -98,6 +99,12 @@ class ConversationOrchestrator:
     def process_turn(self, session_id: str, user_message: str, turn: int, top_k: int) -> SearchRequest:
         state = self.store.get(session_id)
         state.history.append(user_message)
+
+        if turn == 1:
+            # Stated once and never restated. Even the Intent Override never
+            # revises it -- the generator swaps constraints within one target,
+            # so the category it opened with still holds.
+            state.stated_category = slots.stated_category(user_message)
 
         candidates = intent_module.extract_candidate_slots(user_message)
         override_triggered = intent_module.detect_override_cue(user_message)
