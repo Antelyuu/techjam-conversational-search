@@ -236,6 +236,24 @@ MRR against MTTC.
 If the team prefers to submit without it, 0.894920 is the number to expect and
 the other four changes are unaffected.
 
+### The policy is at its optimum
+
+Re-measured live at the final configuration, since the ranking underneath it
+had changed twice since it was tuned:
+
+| variant | score | HitRate | MRR |
+|---|---|---|---|
+| **adopted** | **0.933701** | 0.995 | 0.910671 |
+| identified -> return 1 rather than 10 | 0.933701 | 0.995 | 0.910671 |
+| after the questions are spent, return 5 | 0.927547 | 0.985 | 0.909490 |
+| after the questions are spent, return 3 | 0.921122 | 0.975 | 0.908740 |
+| widen when <=2 candidates remain | 0.932151 | 0.995 | 0.903171 |
+
+The first variant being *byte-identical* is the confirmation that matters:
+when the disclosures narrow the field to one candidate, that candidate is
+already at rank 1, so returning one or ten makes no difference to the score.
+Ten is kept as the cheaper hedge for the case where the reranker disagrees.
+
 ## Method note: the offline replay
 
 The trade above was found by recording, for every session, the target's rank
