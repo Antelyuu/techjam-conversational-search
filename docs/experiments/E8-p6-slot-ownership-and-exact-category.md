@@ -9,7 +9,7 @@ but "**would you have produced this exact string?**"
 experiment_id: "E8"
 phase: "P6"
 hypothesis: "E7 concluded text similarity was exhausted and only a non-text discriminator could separate the surviving misses. That is right about the evidence features and wrong about text: the generator takes whole field values, so exact ownership of a disclosed string -- and of the stated category -- is a structural test with perfect recall on the target and far better precision than containment."
-base_commit: "fd67c18"
+base_commit: "a2cec74"  # was fd67c18 before the 2026-08-30 trailer rewrite
 dataset: "full public set (200 labeled sessions)"
 overall_metrics:
   p5_shipped:        {hit_rate_at_10: 0.950, mrr: 0.659603, mttc: 3.575, technical_score: 0.821381}
