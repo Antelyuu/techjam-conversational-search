@@ -22,7 +22,7 @@ from shopping_agent.catalog import normalize_product
 from shopping_agent.contracts import Candidate
 from shopping_agent.reranking import (
     FEATURE_WEIGHTS,
-    _slot_terms_for_pool,
+    prepare_evidence,
     rerank,
     score_candidate,
 )
@@ -173,7 +173,7 @@ class SlotFeatureTest(unittest.TestCase):
         }
         candidates = [candidate("a", 1), candidate("b", 2)]
         disclosures = ["please wash it in cold water"]
-        terms = _slot_terms_for_pool(disclosures, candidates, products)
+        terms = prepare_evidence(disclosures, candidates, products).slot_terms
         for asin in ("a", "b"):
             scored = score_candidate(
                 candidate(asin), products[asin], {}, slot_terms=terms
@@ -194,7 +194,7 @@ class SlotFeatureTest(unittest.TestCase):
             "d": self.product("d", features=[common]),
         }
         candidates = [candidate(a, i + 1) for i, a in enumerate("abcd")]
-        terms = _slot_terms_for_pool([common, rare], candidates, products)
+        terms = prepare_evidence([common, rare], candidates, products).slot_terms
         by_value = dict(terms)
         self.assertGreater(by_value[rare], by_value[common])
 

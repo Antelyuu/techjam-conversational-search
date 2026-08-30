@@ -7,10 +7,11 @@ import sys
 from pathlib import Path
 
 from shopping_agent import clarification
+from shopping_agent import shortlist
 from shopping_agent.catalog import ProductRecord, flatten_field, normalize_product
 from shopping_agent.dense_retrieval import load_dense_retriever
 from shopping_agent.orchestrator import ConversationOrchestrator
-from shopping_agent.reranking import rerank
+from shopping_agent.reranking import prepare_evidence, rerank
 from shopping_agent.retrieval import DEFAULT_FUSION, FUSION_METHODS, retrieve
 from shopping_agent.text import tokenize
 
@@ -155,6 +156,7 @@ class Agent:
         use_disagreement: bool | None = None,
         enable_clarification: bool | None = None,
         enable_reranker: bool | None = None,
+        enable_shortlist: bool | None = None,
         block_soft_slots: bool | None = None,
         allow_repeats: bool | None = None,
         route_weights: dict[str, float] | None = None,
@@ -173,6 +175,8 @@ class Agent:
             enable_clarification = _env_flag("SHOPPING_AGENT_CLARIFY", default=True)
         if enable_reranker is None:
             enable_reranker = _env_flag("SHOPPING_AGENT_RERANK", default=True)
+        if enable_shortlist is None:
+            enable_shortlist = _env_flag("SHOPPING_AGENT_SHORTLIST", default=True)
         if block_soft_slots is None:
             block_soft_slots = _env_flag("SHOPPING_AGENT_BLOCK_SOFT", default=False)
         if allow_repeats is None:
@@ -188,6 +192,7 @@ class Agent:
         self.use_disagreement = use_disagreement
         self.enable_clarification = enable_clarification
         self.enable_reranker = enable_reranker
+        self.enable_shortlist = enable_shortlist
         self.block_soft_slots = block_soft_slots
         self.route_weights = route_weights
         self._warned: set[str] = set()
@@ -275,26 +280,49 @@ class Agent:
             route_weights=self.route_weights,
             candidate_limit=RERANK_POOL if self.enable_reranker else None,
         )
+        # How far the disclosed constraints have narrowed the field. Prepared
+        # once here because both the reranker and the shortlist policy need
+        # it, and it costs one pass over the pool.
+        live_disclosures = 0
+        consistent = 0
         if self.enable_reranker:
             # A reranker failure must not cost the turn: the fused order is
             # already a valid ranking, so fall back to it rather than raising
             # into respond() and returning nothing (P4-T4).
             try:
+                prepared = prepare_evidence(
+                    request.state.disclosed_text, candidates, self.products
+                )
+                live_disclosures = prepared.live_disclosures
+                consistent = prepared.consistent
                 reranked = rerank(
                     candidates,
                     self.products,
                     request.state.constraints,
                     top_k,
-                    request.state.disclosed_text,
+                    prepared=prepared,
                 )
                 recommendations = [
                     {"parent_asin": item.parent_asin, "score": item.score} for item in reranked
                 ]
             except Exception as error:
                 self._warn_once(f"reranker failed, using fused order: {error}")
+                # Evidence is unavailable on this path, which leaves
+                # live_disclosures at 0 and returns the full list -- the
+                # shortlist policy must not withhold on a turn whose ranking
+                # it could not measure.
+                live_disclosures = 0
                 recommendations = self._fused_recommendations(candidates[:top_k])
         else:
             recommendations = self._fused_recommendations(candidates)
+        # Return the ranked list only as far as the agent can stand behind it
+        # (P6-T2); see shopping_agent/shortlist.py for what that means and
+        # what it was measured to be worth.
+        recommendations = recommendations[
+            : shortlist.shortlist_size(
+                turn, top_k, live_disclosures, consistent, enabled=self.enable_shortlist
+            )
+        ]
         # Asking is free: the evaluator scores recommendations first and then
         # handles ask_attribute separately, so a question never displaces a
         # recommendation. Always return both.

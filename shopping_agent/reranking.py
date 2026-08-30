@@ -127,6 +127,30 @@ FEATURE_WEIGHTS: dict[str, float] = {
     # best point. Worth +0.032 composite over depth alone, +0.0335 at the old
     # depth -- the two changes are independently real. Like token coverage,
     # the feature fails quiet: no contained phrase scores 0.0 for everyone.
+    #
+    # RE-MEASURED (E8) after slot_evidence landed, and **deliberately not
+    # moved to its new optimum**:
+    #
+    #   weight  0.0       2.0       6.0       10.0      16.0
+    #   score   0.854130  0.853005  0.853005  0.853005  0.852855
+    #
+    # Zero now measures +0.001125 better. Slot ownership subsumes this
+    # feature and is strictly sharper: where the two disagree, phrase
+    # containment is crediting an impostor that carries the sentence inside a
+    # longer bullet, which is exactly the false positive ownership was built
+    # to kill.
+    #
+    # Kept at 6.0 anyway, because this is the graceful-degradation layer and
+    # the trade is lopsided. Slot ownership assumes the customer quotes card
+    # values verbatim. If a private set paraphrases, ownership goes silent for
+    # every candidate and the order falls to whatever is beneath it -- with
+    # this at 6.0 that is P5's ranking, and with it at 0.0 it is P5's ranking
+    # minus the +0.032 E7 measured this feature to be worth. Paying 0.0011
+    # certain to insure 0.032 contingent is worth it at any plausible odds.
+    #
+    # This is the one weight in the table set against its own measurement, so
+    # it is the first thing to revisit if the private set is ever confirmed to
+    # use the same generator.
     "phrase_evidence": 6.0,
     # P6-T1, and now the table's dominant feature -- it decides the order and
     # everything above it breaks ties, which is the same shape constraint_
@@ -256,11 +280,33 @@ def _slot_value(product: ProductRecord, slot_terms: list[tuple[str, float]]) -> 
     return matched / total
 
 
-def _slot_terms_for_pool(
+@dataclass(frozen=True)
+class DisclosureEvidence:
+    """Everything the pool-level evidence pass produces, computed once.
+
+    Reranking needs the normalized disclosures; the response needs to know how
+    far they have narrowed the field. Both come out of the same single pass
+    over the pool, so they are prepared together rather than twice.
+    """
+
+    tokens: list[frozenset[str]]
+    phrases: list[tuple[str, int, bool]]
+    slot_terms: list[tuple[str, float]]
+    # Disclosures at least one pooled candidate owns. Zero means the customer
+    # has said nothing yet, or is paraphrasing rather than quoting -- either
+    # way there is no slot evidence to act on.
+    live_disclosures: int
+    # Candidates owning *every* live disclosure. One means the constraints
+    # identify a single product, and because the target owns all of its own
+    # disclosures that product is the target whenever the target is pooled.
+    consistent: int
+
+
+def prepare_evidence(
     disclosures: list[str],
     candidates: list[Candidate],
     products: dict[str, ProductRecord],
-) -> list[tuple[str, float]]:
+) -> DisclosureEvidence:
     """Normalize the disclosures once and price each by how rare it is here.
 
     One pass over the pool per disclosure, which is a frozenset membership
@@ -270,16 +316,25 @@ def _slot_terms_for_pool(
     normalized = [
         value for value in (slots.normalize_disclosure(d) for d in disclosures) if value
     ]
-    if not normalized:
-        return []
+    tokens = evidence.disclosure_token_sets(disclosures)
+    phrases = evidence.disclosure_phrases(disclosures)
     pool = [
         products[c.parent_asin].card_values
         for c in candidates
         if c.parent_asin in products
     ]
+    if not normalized or not pool:
+        return DisclosureEvidence(tokens, phrases, [], 0, 0)
+
     counts = [sum(1 for owned in pool if value in owned) for value in normalized]
     weights = slots.ownership_weights(counts, len(pool))
-    return list(zip(normalized, weights))
+    live = [value for value, count in zip(normalized, counts) if count > 0]
+    consistent = (
+        sum(1 for owned in pool if all(value in owned for value in live)) if live else 0
+    )
+    return DisclosureEvidence(
+        tokens, phrases, list(zip(normalized, weights)), len(live), consistent
+    )
 
 
 def _share(matched: tuple[str, ...], constraints: dict[str, Constraint], strength: str) -> float:
@@ -377,6 +432,7 @@ def rerank(
     constraints: dict[str, Constraint],
     limit: int,
     disclosures: list[str] | None = None,
+    prepared: DisclosureEvidence | None = None,
 ) -> list[RerankedCandidate]:
     """Order the pool by the deterministic scorer and keep the top `limit`.
 
@@ -384,17 +440,16 @@ def rerank(
     separate keep the order retrieval gave them rather than being permuted
     arbitrarily.
     """
-    disclosure_tokens = evidence.disclosure_token_sets(disclosures or [])
-    phrases = evidence.disclosure_phrases(disclosures or [])
-    slot_terms = _slot_terms_for_pool(disclosures or [], candidates, products)
+    if prepared is None:
+        prepared = prepare_evidence(disclosures or [], candidates, products)
     scored = [
         score_candidate(
             candidate,
             products[candidate.parent_asin],
             constraints,
-            disclosure_tokens=disclosure_tokens,
-            disclosure_phrases=phrases,
-            slot_terms=slot_terms,
+            disclosure_tokens=prepared.tokens,
+            disclosure_phrases=prepared.phrases,
+            slot_terms=prepared.slot_terms,
         )
         for candidate in candidates
         if candidate.parent_asin in products
