@@ -3,22 +3,19 @@ __pycache__/
 .DS_Store
 .env
 results.json
-# Ablation outputs are regenerable by their scripts; the numbers that matter
-# are transcribed into docs/experiments/.
+# Ablation outputs are regenerable by their scripts. The figures that matter are
+# transcribed into docs/experiments/.
 fusion_ablation.json
 clarification_ablation.json
 rerank_ablation.json
 rerank_weight_sweep.json
+# The catalogue is distributed through the organiser's participant-kit release and
+# is fetched at setup time; see docs/SETUP.md.
 data/catalog.jsonl
 data/releases/
-# The MiniLM embedding artifact is bundled with the submission so dense
-# retrieval works when the organiser loads the catalogue in a fresh runtime.
-# Rebuild with `python3 -m scripts.build_embeddings` only when the catalogue or
-# selected model changes.
-#
-# bge-small is NOT bundled: that model line stopped by team decision (E1), and
-# its .npy is 73 MB. Keep it local. Ignored because a `git add -A` once swept
-# it into a P4 commit and the history had to be rewritten to get it back out.
+# The MiniLM artifact is bundled so the optional dense route runs in a fresh
+# runtime. bge-small is excluded: that model line was discontinued by team
+# decision (E1) and its artifact is 73 MB.
 data/embeddings/bge-small-en-v1.5.*
 SHA256SUMS
 # Organizer-only code, private evaluation data, manifests, and build reports.
@@ -31,15 +28,19 @@ docs/participant_release_checklist.md
 # Organizer-only pipeline tests.
 tests/test_5core_builder.py
 tests/test_organizer_pipeline.py
+# Local development artifacts and per-machine tooling state, none of which forms
+# part of the submission.
 *.log
-.claude/settings.local.json
+.claude/
 PROGRESS.md
 handoffs/
 route_weight_sweep.json
 tmpwork/
 replay_trace.json
-# The Devpost write-up. Submitted by pasting it into the Devpost form, so it is
-# kept local by team decision rather than tracked here; the README carries the
-# same material for anyone reading the repository. Ignored so a `git add -A`
-# cannot sweep it in, the way one once swept in the bge-small artifact above.
+diagnostics/
+# The Devpost write-up is submitted through the Devpost form and kept local by
+# team decision. The README carries the same material for anyone reading the
+# repository.
 DEVPOST.md
+# Internal team notes, maintained outside the submission.
+explanation.md
