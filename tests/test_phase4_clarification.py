@@ -2,6 +2,7 @@ import unittest
 
 from shopping_agent.catalog import normalize_product
 from shopping_agent.clarification import (
+    ATTRIBUTE_PRIOR_YIELD,
     DEAD_ATTRIBUTES,
     MAX_CLARIFICATIONS,
     WILDCARD_ATTRIBUTE,
@@ -106,7 +107,12 @@ class ChooseAttributeTest(unittest.TestCase):
             state.asked_attributes.add(attribute)
         self.assertNotIn(WILDCARD_ATTRIBUTE, chosen)
 
-    def test_wildcard_is_the_last_resort_when_enabled(self):
+    def test_the_open_question_is_asked_first_when_enabled(self):
+        """P4 asked it last, on E3's finding. P6 asks it first, on E8's:
+        the simulator answers it with *any* undisclosed constraint, so its
+        yield dominates every specific attribute at every point, and queueing
+        it behind six narrower questions left 44 of the 200 sessions not
+        finishing their card until turn 8 (MTTC 3.900 -> 3.655)."""
         state = self.state()
         chosen = []
         while True:
@@ -115,8 +121,12 @@ class ChooseAttributeTest(unittest.TestCase):
                 break
             chosen.append(attribute)
             state.asked_attributes.add(attribute)
-        self.assertEqual(chosen[-1], WILDCARD_ATTRIBUTE)
-        self.assertNotIn(WILDCARD_ATTRIBUTE, chosen[:-1])
+        self.assertEqual(chosen[0], WILDCARD_ATTRIBUTE)
+        self.assertNotIn(WILDCARD_ATTRIBUTE, chosen[1:])
+        # Every specific attribute is still asked behind it. E3's warning was
+        # about running *out* of questions, and that failure mode is what
+        # keeping them all available prevents.
+        self.assertEqual(len(chosen), len(ATTRIBUTE_PRIOR_YIELD))
 
     def test_prefers_the_highest_yielding_attribute_with_no_pool_signal(self):
         self.assertEqual(choose_attribute(self.state(), []), "feature")

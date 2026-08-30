@@ -28,7 +28,32 @@ from .contracts import SessionState
 # opening message has been replayed. That is exactly the share of sessions
 # where asking returns content instead of "I don't have an additional
 # preference for X".
+# "other" is in this table as of P6, and first. The simulator answers it with
+# *any* undisclosed constraint (`customer_reply` skips the classify step for
+# it entirely), so its yield is by construction the share of sessions still
+# holding one -- which is 1.0 until the card is empty, and therefore greater
+# than or equal to every specific attribute's yield at every point in the
+# conversation. 1.0 states that; it is not a tuned number.
+#
+# P4 reached it only after all six specific attributes were spent, on E3's
+# finding that asking it as a substitute for a real policy was worse than
+# asking it last. That finding has expired the way pool depth expired twice
+# before it: E3's +0.111 was mostly the cost of *running out* of questions
+# early, and the concern does not apply to asking it first, because all six
+# specific attributes are still there behind it.
+#
+# MEASURED (E8), moving it up the order by raising its prior:
+#
+#   position     last(P4)  4th       3rd       2nd       1st
+#   score        0.876918  0.879568  0.879681  0.879881  0.881681
+#   MTTC         3.900     3.830     3.680     3.670     3.655
+#
+# Monotone in MTTC the whole way up, which is the mechanism showing itself:
+# 44 of the 200 sessions were not draining their card until turn 8 purely
+# because the one question that could drain it was queued behind six that
+# could not.
 ATTRIBUTE_PRIOR_YIELD: dict[str, float] = {
+    "other": 1.000,
     "feature": 0.960,
     "material": 0.725,
     "color": 0.255,
@@ -132,8 +157,16 @@ def question_value(
 ) -> tuple[float, float, float]:
     """Score one attribute, returning (value, coverage, disagreement) so the
     choice is inspectable rather than a bare number."""
-    coverage, disagreement = attribute_coverage(products, attribute)
     prior = ATTRIBUTE_PRIOR_YIELD.get(attribute, 0.0)
+    if attribute not in _ATTRIBUTE_PATTERNS:
+        # The open question has no vocabulary to scan the pool for, so
+        # coverage and disagreement are undefined for it rather than zero.
+        # Applying the modifier anyway would dock it to 0.6 of its prior on
+        # the strength of a measurement that was never taken -- which is how
+        # it would lose to `feature` on a pool that happens to disagree about
+        # features, despite matching strictly more of the card.
+        return prior, 0.0, 0.0
+    coverage, disagreement = attribute_coverage(products, attribute)
     modifier = DISAGREEMENT_FLOOR + (1.0 - DISAGREEMENT_FLOOR) * disagreement
     return prior * modifier, coverage, disagreement
 
@@ -172,6 +205,11 @@ def choose_attribute(
     unavailable = set(state.rejected_attributes) | fixed | DEAD_ATTRIBUTES
     if not allow_repeats:
         unavailable |= set(state.asked_attributes)
+    if not allow_wildcard:
+        # The open question now competes in the table rather than sitting
+        # behind it, so the ablation flag has to exclude it here to still mean
+        # what it meant in P4.
+        unavailable |= {WILDCARD_ATTRIBUTE}
     available = [a for a in ATTRIBUTE_PRIOR_YIELD if a not in unavailable]
 
     if not available:

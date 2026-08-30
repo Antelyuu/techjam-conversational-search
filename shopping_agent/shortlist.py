@@ -83,6 +83,18 @@ from __future__ import annotations
 # baseline by more than 0.018 -- which is what makes it safe to carry to an
 # unseen split. 6 is where it turns over, as the yield table predicts: by then
 # the agent has run out of questions and is only burning turns.
+#
+# RE-SWEPT (E8) after the open question moved to the front of the asking
+# order, which drains the card faster and so moves what "the questions are
+# spent" means:
+#
+#   turn    2         3         4         5         6         7
+#   score   0.857720  0.874716  0.881914  0.881931  0.879951  0.871448
+#
+# 4 and 5 now tie to within 0.000017 and the ridge has broadened to 4-6.
+# Kept at 5 rather than moved to the joint-best 4: the two are
+# indistinguishable here, and 5 leaves a turn of slack for a private split
+# whose cards drain more slowly than this one's.
 EXPAND_TURN = 5
 
 # What to return while still narrowing. MEASURED (E8) at EXPAND_TURN=5:
