@@ -60,13 +60,13 @@ environment variables, plain `Agent(catalog_path)`.
 
 | | |
 |---|---|
-| TechnicalScore | **0.929426** |
-| Hit Rate@10 | 0.990 |
-| MRR | 0.912421 |
-| MTTC | 2.965 |
-| startup | STARTUP |
-| per-turn latency | LATENCY |
-| peak RSS | RSS |
+| TechnicalScore | **0.933701** |
+| Hit Rate@10 | 0.995 |
+| MRR | 0.910671 |
+| MTTC | 2.850 |
+| startup | 4.0 s |
+| per-turn latency | 61 ms median, 111 ms p95 |
+| peak RSS | 0.95 GB |
 | model / API / token usage | none |
 
 | milestone | TechnicalScore |
@@ -81,7 +81,8 @@ environment variables, plain `Agent(catalog_path)`.
 | P6 slot ownership (E8) | 0.853005 |
 | P6 + confidence-sized shortlist (E8) | 0.876118 |
 | P6 + open question asked first (E8) | 0.881931 |
-| **P6 + exact stated category (E8)** | **0.929426** |
+| P6 + exact stated category (E8) | 0.929426 |
+| **P6 + pool depth re-priced to 400 (E8)** | **0.933701** |
 
 ## How it finds the target
 
@@ -111,7 +112,7 @@ it would have produced those exact strings.**
 - **A shortlist the agent can defend.** Rather than padding ten results on
   turn 1, it returns its single best candidate while still narrowing and the
   full ten once the constraints identify one product or the useful questions
-  are spent. See the caveat in `docs/experiments/E8-...md`; this one is
+  are spent. See the caveat in `docs/experiments/E8-p6-slot-ownership-and-exact-category.md`; this one is
   shaped by the metric and switchable with `SHOPPING_AGENT_SHORTLIST=0`.
 
 Every feature's contribution to a candidate's score is recorded and printable

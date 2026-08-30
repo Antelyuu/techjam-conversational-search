@@ -1,6 +1,6 @@
 # E8 - what the customer *said*, matched exactly
 
-Decision record for P6. Four adopted changes, all of one idea: the simulator
+Decision record for P6. Five adopted changes, four of them one idea: the simulator
 builds its messages out of the target product's own structured fields, so the
 sharpest question to ask of a candidate is not "does your text resemble this?"
 but "**would you have produced this exact string?**"
@@ -17,18 +17,19 @@ overall_metrics:
   plus_shortlist:    {hit_rate_at_10: 0.970, mrr: 0.833060, mttc: 3.940, technical_score: 0.876118}
   plus_questions:    {hit_rate_at_10: 0.965, mrr: 0.836770, mttc: 3.580, technical_score: 0.881931}
   plus_category:     {hit_rate_at_10: 0.990, mrr: 0.912421, mttc: 2.965, technical_score: 0.929426}
+  plus_depth_400:    {hit_rate_at_10: 0.995, mrr: 0.910671, mttc: 2.850, technical_score: 0.933701}
 scenario_metrics:
   p5_shipped:    {buying: 0.9500, browsing: 0.9375, intent_override: 0.9667, boundary: 1.000}
-  plus_category: {buying: 0.9875, browsing: 1.0000, intent_override: 0.9667, boundary: 1.000}
+  plus_depth_400: {buying: 1.0000, browsing: 1.0000, intent_override: 0.9667, boundary: 1.000}
 model_api: {model: "none", network_required: false, prompt_tokens: 0, completion_tokens: 0}
 known_regressions: []
-decision: "ship all four (+0.108045 over P5 as handed off)"
+decision: "ship all five (+0.112320 over P5 as handed off)"
 ```
 
 ## Read this first if you are picking up from here
 
-Two of the four adopted changes are ranking improvements that any metric
-would reward. **One is not**: the shortlist policy (P6-T2) is shaped by this
+Four of the five adopted changes are ranking or dialogue improvements that
+any metric would reward. **One is not**: the shortlist policy (P6-T2) is shaped by this
 metric's break-on-first-hit rule and is worth nothing under a metric that
 scored the best rank across all turns. It is switchable off in one step and
 the reasoning is written out below. Read that section before defending the
@@ -222,9 +223,18 @@ asks a question instead -- and nothing in the rules requires returning ten
 maximum). But it is the one change here that a reviewer could reasonably call
 metric-shaped, so:
 
-**`SHOPPING_AGENT_SHORTLIST=0` restores always-ten.** If the team prefers to
-submit without it, see the measured cost in the table below; the other three
-changes are unaffected either way.
+**`SHOPPING_AGENT_SHORTLIST=0` restores always-ten**, and at the final
+configuration that measures **0.894920** (HitRate 0.995, MRR 0.749732, MTTC
+2.375). So the policy is worth +0.038781 here -- more than the +0.023 it was
+worth when introduced, because the ranking underneath it got better.
+
+One thing did change for the better: at the final configuration it **no longer
+costs a hit**. HitRate is 0.995 with the policy on and 0.995 with it off; the
+session the blind schedule lost is now found either way. The trade is purely
+MRR against MTTC.
+
+If the team prefers to submit without it, 0.894920 is the number to expect and
+the other four changes are unaffected.
 
 ## Method note: the offline replay
 
@@ -265,21 +275,85 @@ ranking. Sizing is not where much more is left.
   Requiring the clause to end in a copula damages 12 of 615,776 catalogue
   values (0.0019%) against the old rule's damaging any value with a colon in
   its first 120 characters.
-- **`RERANK_POOL`** re-swept and holds at 250 (100: 0.845451, 400: 0.851916
-  at the T1 configuration). Deeper now hurts: more impostors owning generic
-  values.
+
 - **`constraint_evidence`** re-swept and holds at 12.0, inside a flat
   plateau spanning 4-16.
 
+## P6-T5: pool depth, re-priced a fourth time (+0.004275)
+
+E5 measured depth flat and rejected it. E6's evidence floor re-priced it to a
+peak at 100. E7's phrase feature re-priced it to 250. P6's two exact features
+re-price it again, to 400:
+
+| depth | 100 | 150 | 250 | 300 | 350 | 400 | 500 | 800 | 1200 |
+|---|---|---|---|---|---|---|---|---|---|
+| score | 0.897176 | 0.910851 | 0.929426 | 0.930551 | 0.933601 | **0.933701** | 0.932851 | 0.932439 | 0.932503 |
+| HitRate | 0.955 | 0.970 | 0.990 | 0.990 | 0.995 | 0.995 | 0.995 | 0.995 | 0.995 |
+
+The mechanism is the same one every time, and by now it should be the
+project's default expectation rather than a surprise: **a depth ablation is
+only as durable as the ranking features it was measured under.** A deeper pool
+only pays when a rescued candidate can be told apart from the impostors that
+come with it, and an exact test tells them apart outright.
+
+350 and 400 tie exactly on HitRate and MRR and differ by 0.005 of a turn --
+one session hitting one turn earlier, a single-session artifact rather than a
+robust margin. 400 is adopted as the measured best; 350 costs 0.0001 and runs
+11% faster, so it is the point to move to if latency ever binds.
+
+Everything else was re-swept at depth 400 and holds: EXPAND_TURN (4 and 5 now
+tie exactly at 0.933701; 5 keeps the higher MRR), NARROWING_SIZE 1,
+slot_evidence 16.0, category_exact 8.0, and the whole adjustment half of the
+table -- `lexical_rank`, `soft_preferences`, `hard_constraints` -- which is now
+completely inert, identical to six decimals across its whole swept range. The
+two exact features decide the order outright and everything else breaks ties
+that no longer occur. Those weights are kept where they are precisely because
+they are what the ranking falls back to if the exact tests ever go silent.
+
+## Cost
+
+Measured on the full public set, single process, no network, no model:
+
+| | P5 | P6 |
+|---|---|---|
+| startup (index + card values) | 1.34 s | 4.0 s |
+| per-turn latency, median | 38 ms | 61 ms |
+| per-turn latency, p95 | 72 ms | 111 ms |
+| peak RSS | 0.75 GB | 0.95 GB |
+| tokens / network | none | none |
+
+The extra startup and roughly 200 MB of RSS are the per-product `card_values`
+sets (615,776 strings across 50,000 products) plus the deeper pool. Latency
+roughly doubled, mostly from depth 250 -> 400. All well inside anything the
+organizer is likely to impose, and depth 350 gives back 11% of it for 0.0001
+if that assumption is wrong.
+
 ## Where the remaining headroom is
 
-At 0.929426 with 2 misses, the arithmetic is tight: HitRate is worth at most
-+0.005 more, MRR among hits +0.023, and efficiency is capped by the shortlist
-policy's deliberate delay. 175 of the 198 hits are already at rank 1.
+At 0.933701 with **1 miss**, the arithmetic is tight: HitRate is worth at most
++0.0025 more, MRR among hits +0.027, and efficiency is capped by the shortlist
+policy's deliberate delay -- turning the policy off buys 0.475 of a turn and
+costs 0.161 of MRR, a trade already measured in the wrong direction (0.894920).
 
-Checked and found empty: the `user_profile` carries only generic tags ("fit",
-"comfort") derived from prior purchases and nothing about the target; the
-card's budget line remains structurally unreachable (0/200, E6); and
-`target_category` is written into the card but never read by the simulator.
-The `difficulty_bucket` and `category_bucket` fields exist on the sample but
-are never passed to `reset`, so they are not visible to the agent.
+Also measured and found empty during P6, so that nobody re-derives them:
+
+- The `user_profile` carries only generic tags ("fit", "comfort") derived from
+  prior purchases and nothing about the target.
+- The card's budget line remains structurally unreachable (0/200, E6).
+- `target_category` is written into the card but never read by the simulator.
+- `difficulty_bucket` and `category_bucket` exist on the sample but are never
+  passed to `reset`, so the agent cannot see them.
+- **Folding the stated category into the shortlist's consistency test is a
+  no-op.** It is arguably the more correct definition -- the category *is*
+  something the customer said -- but the two definitions disagree on **0 of
+  591 turns**, so it was reverted rather than carried as a parameter and a
+  branch that do nothing. By the time slot evidence is live, the candidates
+  owning every live disclosure already agree on the category. Checked by
+  counting the disagreements, not by comparing composites: equal scores are
+  not evidence that a code path ran.
+- **Blind shortlist truncation, before the ranking improved.** Measured at
+  the P5 ranking, every fixed schedule lost (best 0.816712 against 0.821381)
+  because HitRate fell 0.950 -> 0.920. The same idea only became worth
+  +0.023 once slot ownership made the top candidate right often enough. An
+  idea rejected on measurement is rejected *at that configuration*, which is
+  this project's oldest lesson and cost it a phase to learn twice.

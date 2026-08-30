@@ -47,7 +47,24 @@ _DEFAULT_QUESTION = "Could you tell me a little more about what you need?"
 #
 # 250 and 300 tie at the HitRate top (0.940); 250 is the earlier, cheaper
 # point of that plateau.
-RERANK_POOL = 250
+#
+# RE-SWEPT a fourth time (E8), after slot ownership and the exact stated
+# category. Both are exact tests, so a rescued deep candidate is now either
+# identified outright or scores zero -- which is precisely the discriminating
+# power E5 found missing when it first measured depth flat:
+#
+#   depth   100       150       250       300       350       400       500       800       1200
+#   score   0.897176  0.910851  0.929426  0.930551  0.933601  0.933701  0.932851  0.932439  0.932503
+#   HitRate 0.955     0.970     0.990     0.990     0.995     0.995     0.995     0.995     0.995
+#
+# The pattern holds a fourth time: **a depth ablation is only as durable as
+# the ranking features it was measured under.** 350 and 400 tie exactly on
+# HitRate (0.995) and MRR (0.910671) and differ only by 0.005 of a turn --
+# one session hitting one turn earlier, which is a single-session artifact
+# rather than a robust margin. 400 is the measured best and is adopted; 350
+# costs 0.0001 and runs 11% faster (31 s against 35 s for a full public-set
+# pass), so it is the point to move to if latency ever binds.
+RERANK_POOL = 400
 
 # P5-T1: the dense route is off by default, reversing P3's decision on
 # measurement rather than on preference.
