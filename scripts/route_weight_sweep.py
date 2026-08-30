@@ -20,10 +20,18 @@ Run from the repository root:
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# These four scripts study the dense route, which P5 turned off by default on
+# measurement (starter/agent.py, DENSE_BY_DEFAULT). A bare Agent() therefore has
+# no dense route to ablate and the script exits saying so. Ask for it explicitly
+# rather than making the caller remember an environment variable to run a script
+# whose entire subject is that route.
+os.environ.setdefault("SHOPPING_AGENT_DENSE", "1")
 
 from evaluator.local_evaluator import catalog_index, evaluate, load_jsonl
 from starter.agent import Agent

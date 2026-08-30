@@ -148,9 +148,17 @@ FEATURE_WEIGHTS: dict[str, float] = {
     # minus the +0.032 E7 measured this feature to be worth. Paying 0.0011
     # certain to insure 0.032 contingent is worth it at any plausible odds.
     #
-    # This is the one weight in the table set against its own measurement, so
-    # it is the first thing to revisit if the private set is ever confirmed to
-    # use the same generator.
+    # RE-MEASURED once more at the final P6 configuration, and the 0.0011 is
+    # now gone too:
+    #
+    #   weight  0.0       3.0       6.0       12.0
+    #   score   0.929426  0.929426  0.929426  0.929426
+    #
+    # Identical to six decimals across the range. category_exact separates
+    # the near-duplicates this feature used to disagree with slot ownership
+    # about, so it no longer decides anything either way on this set. The
+    # insurance is free, which settles the question that the earlier version
+    # of this comment had to argue.
     "phrase_evidence": 6.0,
     # P6-T1, and now the table's dominant feature -- it decides the order and
     # everything above it breaks ties, which is the same shape constraint_

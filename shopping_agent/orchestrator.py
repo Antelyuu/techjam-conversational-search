@@ -13,8 +13,18 @@ from .contracts import SearchRequest, SessionState
 # their wording out of the query matters: the nudge below would otherwise
 # contribute "options", "specific" and "attribute" as search terms every time
 # the agent failed to ask a question.
+#
+# The Browsing/Boundary opener is one of them: "I'm looking for {category},
+# but I'm still exploring." names the category and discloses nothing else.
+# _OPENER_RE below already consumes it whole and so leaves nothing to absorb
+# -- but only because no category on the frozen catalogue contains a full
+# stop (measured: 0 of 1115). Saying it here makes it true by intent rather
+# than by luck; without it, a category like "Boys' 2 Pc. Sets" would end the
+# opener early and leave "Sets, but I'm still exploring" to be absorbed as a
+# constraint.
 _EMPTY_REPLY_RE = re.compile(
-    r"not quite right yet|do(?:n'?t| not) have an?\s+(?:additional\s+)?preference",
+    r"not quite right yet|do(?:n'?t| not) have an?\s+(?:additional\s+)?preference"
+    r"|but i'?m still exploring",
     re.IGNORECASE,
 )
 

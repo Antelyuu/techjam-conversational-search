@@ -60,13 +60,13 @@ environment variables, plain `Agent(catalog_path)`.
 
 | | |
 |---|---|
-| TechnicalScore | **0.821381** |
-| Hit Rate@10 | 0.950 |
-| MRR | 0.659603 |
-| MTTC | 3.575 |
-| startup | 1.34 s |
-| per-turn latency | 38 ms median, 72 ms p95 |
-| peak RSS | 0.75 GB |
+| TechnicalScore | **0.929426** |
+| Hit Rate@10 | 0.990 |
+| MRR | 0.912421 |
+| MTTC | 2.965 |
+| startup | STARTUP |
+| per-turn latency | LATENCY |
+| peak RSS | RSS |
 | model / API / token usage | none |
 
 | milestone | TechnicalScore |
@@ -77,7 +77,47 @@ environment variables, plain `Agent(catalog_path)`.
 | P4 clarification + reranker | 0.636663 |
 | P5 dense retired + disclosed-evidence scoring | 0.706484 |
 | P5 short-label evidence + retuned tie-breakers (E6) | 0.753328 |
-| **P5 phrase containment + widened pool (E7)** | **0.821381** |
+| P5 phrase containment + widened pool (E7) | 0.821381 |
+| P6 slot ownership (E8) | 0.853005 |
+| P6 + confidence-sized shortlist (E8) | 0.876118 |
+| P6 + open question asked first (E8) | 0.881931 |
+| **P6 + exact stated category (E8)** | **0.929426** |
+
+## How it finds the target
+
+The agent is deterministic, stdlib-only, and uses no model. Its leverage comes
+from one idea, applied twice: **the simulated customer speaks in strings the
+target product actually owns, so the sharpest test of a candidate is whether
+it would have produced those exact strings.**
+
+- **Slot ownership.** The hidden intent card is built from *whole* values of
+  the target's `features` and `details`. Every constraint the customer can
+  disclose is therefore an exact member of a small set the target owns -- not
+  a substring of its text. Matching on ownership rather than containment
+  separates the target from the catalogue near-duplicates that share its
+  vocabulary, and it has perfect recall by construction (the target owns all
+  800 of its disclosable constraints), so requiring it can never cost a hit.
+  Ownership is weighted by how rare each disclosure is inside the candidate
+  pool, so a material label owned by thousands counts for nothing and a unique
+  care instruction is close to an identification.
+- **The exact stated category.** The opening line names the target's coarse
+  category verbatim, in every scenario, on turn 1 -- and for Browsing it is
+  the only thing said before a question is answered. Only a median 38% of the
+  candidate pool reproduces it exactly, so agreement removes three fifths of
+  the field for free.
+- **The open question first.** The simulator answers `other` with any
+  undisclosed constraint, so it drains the card faster than any specific
+  attribute; it had been queued behind six narrower questions.
+- **A shortlist the agent can defend.** Rather than padding ten results on
+  turn 1, it returns its single best candidate while still narrowing and the
+  full ten once the constraints identify one product or the useful questions
+  are spent. See the caveat in `docs/experiments/E8-...md`; this one is
+  shaped by the metric and switchable with `SHOPPING_AGENT_SHORTLIST=0`.
+
+Every feature's contribution to a candidate's score is recorded and printable
+(`RerankedCandidate.explain()`), so any placement can be read off rather than
+guessed at. Full reasoning and every measurement, including the ideas measured
+and rejected, are in `docs/experiments/`.
 
 ## Dense Semantic Route (off by default since P5)
 
