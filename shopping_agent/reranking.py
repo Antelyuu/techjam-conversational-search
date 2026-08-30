@@ -222,6 +222,20 @@ FEATURE_WEIGHTS: dict[str, float] = {
     # Fails quiet like the evidence features: a customer who never states a
     # category, or states one this catalogue cannot reproduce, leaves
     # stated_category None and the feature scores 0.0 for every candidate.
+    #
+    # SUPERSEDED as a live feature by P6-T7 (E9), which applies the same exact
+    # test at retrieval instead. Every pooled candidate now reproduces the
+    # stated category, so this scores 1.0 across the board and orders nothing:
+    #
+    #   weight  0.0       4.0       8.0       16.0
+    #   score   0.945497  0.945497  0.945497  0.945497
+    #
+    # Kept anyway, for the reason phrase_evidence was kept in E8 rather than
+    # the reason a tuned value is kept: it is the graceful-degradation layer
+    # for its own filter. The filter stands down whenever the restricted
+    # search returns nothing, and on that path the pool is catalogue-wide
+    # again and this is exactly the feature that used to be worth +0.0475.
+    # Inert here costs nothing; absent there would cost that.
     "category_exact": 8.0,
 }
 

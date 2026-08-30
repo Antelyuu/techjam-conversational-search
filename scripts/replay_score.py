@@ -80,8 +80,8 @@ def load(path: str = "replay_trace.json") -> list[dict]:
 def validate(trace: list[dict]) -> None:
     """The trace is worthless unless it reproduces the live evaluator."""
     for name, policy, expected in (
-        ("shipped", SHIPPED, 0.942229),
-        ("always-ten", ALWAYS_TEN, 0.894920),
+        ("shipped", SHIPPED, 0.945497),
+        ("always-ten", ALWAYS_TEN, 0.885293),
     ):
         got = score(trace, policy)
         status = "OK " if got["score"] == expected else "MISMATCH"

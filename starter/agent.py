@@ -65,6 +65,25 @@ _DEFAULT_QUESTION = "Could you tell me a little more about what you need?"
 # rather than a robust margin. 400 is the measured best and is adopted; 350
 # costs 0.0001 and runs 11% faster (31 s against 35 s for a full public-set
 # pass), so it is the point to move to if latency ever binds.
+#
+# RE-SWEPT a fifth time (E9), after P6-T7 restricted retrieval to the stated
+# category, and this time the answer is that depth no longer matters at all:
+#
+#   depth   200       300       400       600       800       1000
+#   score   0.945497  0.945497  0.945497  0.945497  0.945497  0.945497
+#
+# Identical to six decimals across a 5x range, which is the first time this
+# sweep has been flat since E5 -- and for the opposite reason. E5 was flat
+# because a rescued deep candidate could not be told apart; this is flat
+# because there is nothing left to rescue. The pool is now the customer's
+# category (median 179 rows of 50,000), so 200 already holds all of it for
+# most sessions and the tail that binds the 400 cap -- 122 of 561 turns --
+# turns out to contain no target that the ranking would have found anyway.
+#
+# Left at 400 rather than lowered to the cheapest tied value. There is no
+# measurement separating them here, so the choice falls to which is safer on
+# an unseen split, and that is the one with headroom for a catalogue whose
+# categories are larger than this one's.
 RERANK_POOL = 400
 
 # P5-T1: the dense route is off by default, reversing P3's decision on
