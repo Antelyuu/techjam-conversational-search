@@ -38,6 +38,7 @@ python3 -m evaluator.local_evaluator     # no dependencies, no network, no env v
 - [Configuration flags](#configuration-flags)
 - [Tests](#tests)
 - [Repository layout](#repository-layout)
+- [How decisions were made](#how-decisions-were-made)
 - [Limitations and what we would improve](#limitations-and-what-we-would-improve)
 - [Team contributions](#team-contributions)
 - [The challenge itself](#the-challenge-itself)
@@ -417,22 +418,28 @@ Efficiency     = clip((11 - MTTC) / 10, 0, 1)
 
 ### How we got here
 
-| milestone | TechnicalScore |
-|---|---|
-| starter BM25 | 0.106710 |
-| P2 constraint-aware lexical retrieval | 0.115573 |
-| P3 dense + weighted fusion | 0.151089 |
-| P4 clarification + deterministic reranker | 0.636663 |
-| P5 dense removed, disclosed-evidence scoring added | 0.706484 |
-| P5 short-label evidence + retuned tie-breakers (E6) | 0.753328 |
-| P5 phrase containment + widened pool (E7) | 0.821381 |
-| P6 slot ownership (E8) | 0.853005 |
-| P6 + confidence-sized shortlist (E8) | 0.876118 |
-| P6 + open question asked first (E8) | 0.881931 |
-| P6 + exact stated category (E8) | 0.929426 |
-| P6 + pool depth re-priced to 400 (E8) | 0.933701 |
-| P6 + disclosure-gated shortlist widening (E9) | 0.942229 |
-| **P6 + category-filtered retrieval (E9)** | **0.945497** |
+| milestone | Score | HitRate | MRR | MTTC |
+|---|---|---|---|---|
+| starter BM25 | 0.106710 | 0.125 | 0.068034 | 9.810 |
+| P2 constraint-aware lexical retrieval | 0.115573 | 0.135 | 0.074575 | 9.715 |
+| P3 dense + weighted fusion | 0.151089 | 0.180 | 0.088964 | 9.280 |
+| P4 clarification + deterministic reranker | 0.636663 | 0.755 | 0.471877 | 5.120 |
+| P5 dense route removed | 0.687598 | 0.820 | 0.512661 | 4.810 |
+| P5 + disclosed-evidence scoring | 0.706484 | 0.830 | 0.550613 | 4.685 |
+| P5 short-label evidence + retuned tie-breakers (E6) | 0.753328 | 0.870 | 0.605760 | 4.170 |
+| P5 phrase containment + widened pool (E7) | 0.821381 | 0.950 | 0.659603 | 3.575 |
+| P6 slot ownership (E8) | 0.853005 | 0.975 | 0.698018 | 3.195 |
+| P6 + confidence-sized shortlist (E8) | 0.876118 | 0.970 | 0.833060 | 3.940 |
+| P6 + open question asked first (E8) | 0.881931 | 0.965 | 0.836770 | 3.580 |
+| P6 + exact stated category (E8) | 0.929426 | 0.990 | 0.912421 | 2.965 |
+| P6 + pool depth re-priced to 400 (E8) | 0.933701 | 0.995 | 0.910671 | 2.850 |
+| P6 + disclosure-gated shortlist widening (E9) | 0.942229 | 0.995 | 0.942764 | 2.905 |
+| **P6 + category-filtered retrieval (E9)** | **0.945497** | **1.000** | **0.938657** | **2.805** |
+
+Two rows go backwards on a component metric and forwards on the composite. The
+shortlist policy costs HitRate 0.975 to 0.970 and buys MRR 0.698 to 0.833; the
+category filter costs MRR 0.943 to 0.939 and buys the last hit. Both are the
+expected shape rather than a surprise, and both are explained where they happen.
 
 The single largest contributor is clarification. The simulator discloses a hidden
 constraint only when asked, so before P4 three of the four scenarios landed every hit on
@@ -484,6 +491,24 @@ together:
 | dense + weighted | **0.151089** | 0.636663 |
 
 Switching the dense route off is worth +0.0509, and it wins or ties on every scenario.
+
+The composite says the dense route lost. Asking each route separately whether it held
+the ground-truth target in a 50-candidate pool says why:
+
+| turn | median query words | lexical recall | dense recall |
+|---|---|---|---|
+| 1 | 12 | 0.3800 | 0.3200 |
+| 2 | 15 | 0.4200 | 0.2200 |
+| 3 | 24 | 0.7100 | 0.2550 |
+| 5 | 29 | 0.7450 | 0.3000 |
+| 10 | 36 | 0.7400 | 0.3600 |
+
+At turn 1 the two routes are comparable, which is the world E1 and E2 measured in, and
+their conclusion was right for it. From turn 2 the clarification policy starts feeding
+the query sentences quoted out of the target's own `features` and `details`, and the
+routes come apart. Lexical recall nearly doubles while dense stays flat, because BM25
+sharpens as rare terms accumulate whereas one fixed-width sentence embedding averages a
+growing paragraph toward the corpus mean. P3's decision was not wrong; it expired.
 
 We kept the route, its flag and the prebuilt MiniLM artifact, because the result is
 about this query distribution rather than about dense retrieval in general:
@@ -584,6 +609,49 @@ so a future reader does not re-derive a dead end.
 | E9 | category-filtered retrieval, the flat re-sweep, and one rejected idea |
 
 ---
+
+## How decisions were made
+
+The method mattered more than any individual idea, and four rules came out of it.
+
+**Measure everything, and keep the failures.** Every experiment is written up in
+`docs/experiments/`, including the ones that lost, with their numbers. Four of the nine
+records exist mainly so nobody re-tries a dead idea in six weeks. The rejected
+decline-suppression finding is written down specifically because the code it describes
+looks like a bug to anyone reading it cold.
+
+**A rejected idea is only rejected at the configuration you tested it on.** We measured
+the candidate pool depth five separate times and got a different answer each time: 50,
+then 100, then 250, then 400, and finally that it no longer matters at all, with
+depths from 200 to 1000 scoring identically to six decimals. Each new ranking feature
+changed what a deep candidate was worth. Blind shortlist truncation is the same story
+in reverse. It lost at the P5 ranking (0.816712 against 0.821381, because HitRate fell
+from 0.950 to 0.920) and only became worth +0.023 once slot ownership made the top
+candidate right often enough. When something changes character, re-price everything
+that was tuned against the old version.
+
+**Equal scores are not evidence that a code path ran.** Twice a change scored
+identically and the tempting move was to record it as neutral and keep it. Instead we
+counted how often the old and new code actually disagreed. Folding the stated category
+into the shortlist's consistency test is arguably the more correct definition, but the
+two definitions disagree on 0 of 591 turns, so it was reverted rather than carried as a
+branch that does nothing. Count disagreements, not composites.
+
+**Check a reconstruction against the real thing, over everything.** The agent
+re-implements the simulator's logic twice, for slot ownership and for the coarse
+category. Both times we verified it against the actual implementation across all 50,000
+products rather than against hand-written test cases, which is the only reason a subtle
+punctuation bug was ever found. A hand-written expectation encodes the same
+misunderstanding as the code it is testing.
+
+**Make expensive questions cheap.** Answering "when should the agent show its full
+list?" meant a 30-second evaluation run per variant. Instead `scripts/replay_ranks.py`
+records the target's position at every turn of every session in one pass, and
+`scripts/replay_score.py` then scores any candidate policy in milliseconds. This is only
+valid because the simulated customer's replies depend on our question and never on our
+recommendations, so removing the evaluator's early stop does not change the
+conversation. We proved the replay reproduced the live evaluator exactly before trusting
+it, and it re-checks itself on every run.
 
 ## Limitations and what we would improve
 
