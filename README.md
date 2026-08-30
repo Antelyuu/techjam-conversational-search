@@ -1,4 +1,4 @@
-# Conversational Shopping Agent
+# Conversational Shopping Agent - chud-pro-max-shopinator
 
 Our entry for the **TechJam Conversational E-Commerce Search Challenge**.
 
