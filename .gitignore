@@ -38,3 +38,8 @@ handoffs/
 route_weight_sweep.json
 tmpwork/
 replay_trace.json
+# The Devpost write-up. Submitted by pasting it into the Devpost form, so it is
+# kept local by team decision rather than tracked here; the README carries the
+# same material for anyone reading the repository. Ignored so a `git add -A`
+# cannot sweep it in, the way one once swept in the bge-small artifact above.
+DEVPOST.md
