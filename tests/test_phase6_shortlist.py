@@ -54,16 +54,35 @@ class ShortlistPolicyTest(unittest.TestCase):
                 f"turn {turn} should return the full list",
             )
 
-    def test_without_evidence_it_never_withholds(self):
+    def test_unowned_disclosures_switch_the_policy_off(self):
         """The robustness condition. A customer who paraphrases instead of
         quoting leaves live_disclosures at 0 on every turn, and the policy has
         to switch itself off rather than withhold on a ranking it cannot
         measure."""
         for turn in range(1, 11):
             self.assertEqual(
-                shortlist.shortlist_size(turn, 10, live_disclosures=0, consistent=0),
+                shortlist.shortlist_size(
+                    turn, 10, live_disclosures=0, consistent=0, disclosed=3
+                ),
                 10,
-                f"turn {turn} withheld without evidence",
+                f"turn {turn} withheld on a ranking it could not measure",
+            )
+
+    def test_having_said_nothing_yet_is_not_the_paraphrase_signal(self):
+        """P6-T6, and the distinction the whole clause turns on.
+
+        Zero owned disclosures means "nobody owns what the customer said" only
+        once the customer has said something. Before that it is a certainty --
+        a Browsing opener discloses nothing at all -- and reading it as the
+        paraphrase signal handed out a padded ten built on the category alone.
+        """
+        for turn in range(1, shortlist.EXPAND_TURN):
+            self.assertEqual(
+                shortlist.shortlist_size(
+                    turn, 10, live_disclosures=0, consistent=0, disclosed=0
+                ),
+                shortlist.NARROWING_SIZE,
+                f"turn {turn} padded a list it had no evidence for",
             )
 
     def test_the_switch_restores_the_previous_behaviour(self):
@@ -114,9 +133,14 @@ class ConsistencySignalTest(unittest.TestCase):
         found = prepare_evidence(["please wash it in cold water"], candidates, products)
         self.assertEqual(found.live_disclosures, 0)
         self.assertEqual(found.consistent, 0)
-        # ... and that is exactly what makes the policy stand down.
+        # ... and that is exactly what makes the policy stand down -- but only
+        # because something *was* said. The disclosure count is what carries
+        # that half of the test; live_disclosures alone cannot.
         self.assertEqual(
-            shortlist.shortlist_size(1, 10, found.live_disclosures, found.consistent), 10
+            shortlist.shortlist_size(
+                1, 10, found.live_disclosures, found.consistent, disclosed=1
+            ),
+            10,
         )
 
     def test_nothing_disclosed_yet_is_not_evidence_either(self):

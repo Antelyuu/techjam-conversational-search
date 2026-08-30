@@ -302,6 +302,12 @@ class Agent:
         # it, and it costs one pass over the pool.
         live_disclosures = 0
         consistent = 0
+        # Whether this turn's evidence was actually measured. The shortlist
+        # policy reads "no candidate owns anything the customer said" as a
+        # reason to stop withholding, and that reading is only valid when the
+        # measurement ran; an unmeasured turn must not be mistaken for a
+        # measured zero in either direction.
+        measured = False
         if self.enable_reranker:
             # A reranker failure must not cost the turn: the fused order is
             # already a valid ranking, so fall back to it rather than raising
@@ -312,6 +318,7 @@ class Agent:
                 )
                 live_disclosures = prepared.live_disclosures
                 consistent = prepared.consistent
+                measured = True
                 reranked = rerank(
                     candidates,
                     self.products,
@@ -325,22 +332,28 @@ class Agent:
                 ]
             except Exception as error:
                 self._warn_once(f"reranker failed, using fused order: {error}")
-                # Evidence is unavailable on this path, which leaves
-                # live_disclosures at 0 and returns the full list -- the
-                # shortlist policy must not withhold on a turn whose ranking
-                # it could not measure.
-                live_disclosures = 0
+                # Evidence is unavailable on this path, so `measured` stays
+                # False and the full list is returned -- the shortlist policy
+                # must not withhold on a turn whose ranking it could not
+                # measure.
+                measured = False
                 recommendations = self._fused_recommendations(candidates[:top_k])
         else:
             recommendations = self._fused_recommendations(candidates)
         # Return the ranked list only as far as the agent can stand behind it
         # (P6-T2); see shopping_agent/shortlist.py for what that means and
         # what it was measured to be worth.
-        recommendations = recommendations[
-            : shortlist.shortlist_size(
-                turn, top_k, live_disclosures, consistent, enabled=self.enable_shortlist
-            )
-        ]
+        if measured:
+            recommendations = recommendations[
+                : shortlist.shortlist_size(
+                    turn,
+                    top_k,
+                    live_disclosures,
+                    consistent,
+                    len(request.state.disclosed_text),
+                    enabled=self.enable_shortlist,
+                )
+            ]
         # Asking is free: the evaluator scores recommendations first and then
         # handles ask_attribute separately, so a question never displaces a
         # recommendation. Always return both.

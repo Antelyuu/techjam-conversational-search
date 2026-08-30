@@ -30,7 +30,8 @@ when any of three things is true:
      holds the target is rank 1 in 97 of the 99 public sessions where it
      fires;
   2. the high-yield questions are spent (see EXPAND_TURN);
-  3. **there is no slot evidence at all.**
+  3. **the customer has disclosed something and no candidate owns any of
+     it.**
 
 The third condition is the one that makes this safe rather than clever, and
 it is not a tie-breaker -- it is the whole robustness argument. Withholding
@@ -39,6 +40,34 @@ customer is paraphrasing rather than quoting card values, no candidate owns
 anything, `live_disclosures` is 0 on every turn, and the agent returns the
 full ten exactly as it did before this module existed. The policy cannot
 misfire on a distribution it cannot read; it switches itself off instead.
+
+**P6-T6 corrected what that condition tests.** It used to read
+`live_disclosures == 0` alone, and that is not the paraphrase signal -- it is
+the paraphrase signal *only once the customer has actually said something*.
+On turn 1 of a Browsing or Boundary session the opener is "I'm looking for
+{category}, but I'm still exploring": it discloses nothing at all, so no
+candidate can own anything, and the clause fired on a certainty rather than
+on a measurement. It then handed out a padded ten built on the category
+alone, which is exactly the lottery ticket this module exists to refuse.
+
+Counted rather than inferred, over the 200 public sessions (2000 turns):
+
+  clause fires on live == 0 alone                    100 turns, 90 sessions
+    ...of those, on turn 1 or 2, Browsing/Boundary   100 turns  (all of them)
+  clause fires with disclosures on record but no
+    owner -- the case it was written to insure         0 turns
+
+So on this split every firing was spurious and the insurance never once did
+its job. Requiring `disclosed > 0` removes all 100 spurious firings and keeps
+the insurance intact for a private split that paraphrases, where the two
+predicates part company. Seven Browsing sessions were cashing in a turn-1
+rank of 3, 4, 7, 7, 7, 8 or 9 that became rank 1 one or two turns later.
+
+MEASURED (E9): 0.933701 -> 0.942229 (HitRate 0.995 either way, MRR 0.910671
+-> 0.942764, MTTC 2.850 -> 2.905). Identical on this split to deleting the
+clause outright, which is the honest way to describe it: the retained
+insurance is untested here by construction, because the public customer
+always quotes.
 
 MEASURED (E8) over the public set, at the E8 ranking:
 
@@ -109,18 +138,22 @@ def shortlist_size(
     top_k: int,
     live_disclosures: int,
     consistent: int,
+    disclosed: int = 0,
     enabled: bool = True,
 ) -> int:
     """How many of the ranked candidates to return this turn.
 
     `live_disclosures` is how many disclosed constraints any pooled candidate
-    owns, and `consistent` how many candidates own all of them -- both from
-    reranking.prepare_evidence.
+    owns and `consistent` how many candidates own all of them -- both from
+    reranking.prepare_evidence. `disclosed` is how many constraints the
+    customer has stated at all, which is what separates "nobody owns what was
+    said" from "nothing has been said yet"; see the module docstring.
     """
     if not enabled:
         return top_k
-    if live_disclosures <= 0:
-        # No evidence to narrow with, so nothing justifies a short list.
+    if disclosed > 0 and live_disclosures <= 0:
+        # The customer has stated constraints and no candidate owns any of
+        # them, so the agent cannot read this distribution and stops trying.
         return top_k
     if turn >= EXPAND_TURN:
         return top_k

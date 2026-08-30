@@ -36,3 +36,5 @@ tests/test_organizer_pipeline.py
 PROGRESS.md
 handoffs/
 route_weight_sweep.json
+tmpwork/
+replay_trace.json
