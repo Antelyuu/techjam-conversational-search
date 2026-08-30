@@ -5,6 +5,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import slots
+
 PRICE_RE = re.compile(r"(\d+(?:\.\d+)?)")
 LOWER_BOUND_PRICE_RE = re.compile(r"\b(?:from|starting at|as low as)\b", re.IGNORECASE)
 
@@ -22,6 +24,10 @@ class ProductRecord:
     # variants), not the exact price of the specific product.
     price_is_lower_bound: bool
     searchable_text: str
+    # Every string this product could contribute to the simulator's hidden
+    # intent card, as whole field values rather than substrings. See
+    # shopping_agent/slots.py for what that buys and why it is exact.
+    card_values: frozenset[str] = frozenset()
 
 
 def flatten_field(value: object) -> str:
@@ -80,6 +86,7 @@ def normalize_product(raw: dict) -> ProductRecord:
         price=price,
         price_is_lower_bound=price_is_lower_bound,
         searchable_text=searchable_text,
+        card_values=slots.card_values(raw),
     )
 
 

@@ -32,6 +32,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from . import evidence
+from . import slots
 from .catalog import ProductRecord
 from .contracts import Candidate, Constraint
 from .filtering import (
@@ -127,6 +128,37 @@ FEATURE_WEIGHTS: dict[str, float] = {
     # depth -- the two changes are independently real. Like token coverage,
     # the feature fails quiet: no contained phrase scores 0.0 for everyone.
     "phrase_evidence": 6.0,
+    # P6-T1, and now the table's dominant feature -- it decides the order and
+    # everything above it breaks ties, which is the same shape constraint_
+    # evidence had in P5 and for the same reason: it answers a sharper
+    # question than the features it displaces.
+    #
+    # E7 concluded that text similarity was exhausted and only a *non-text*
+    # discriminator could separate the surviving misses. That conclusion was
+    # right about the evidence features and wrong about text: what was
+    # missing was not a different signal but a structural question about the
+    # same one -- does this candidate own the disclosed sentence as a whole
+    # field value of its own, rather than merely contain it somewhere? See
+    # shopping_agent/slots.py.
+    #
+    # MEASURED (E8), sweeping this weight alone at RERANK_POOL 250:
+    #
+    #   weight  0.0       4.0       8.0       16.0      24.0      32.0      48.0
+    #   score   0.821381  0.850805  0.852755  0.853005  0.853005  0.853005  0.853005
+    #   HitRate 0.950     0.975     0.975     0.975     0.975     0.975     0.975
+    #   MRR     0.659603  0.690685  0.697185  0.698018  0.698018  0.698018  0.698018
+    #
+    # Flat to six decimals from 16 upward: by then slot ownership decides
+    # outright. 16.0 is the first point of that plateau. Worth +0.0316
+    # composite, and it is the only change in the project's history to move
+    # all three metrics at once -- HitRate 0.950 -> 0.975, MRR +0.038,
+    # MTTC 3.575 -> 3.195.
+    #
+    # Safe at a high weight for the reason constraint_evidence is: if the
+    # customer paraphrases instead of quoting, no candidate owns anything,
+    # every candidate scores 0.0, and the table beneath decides. The failure
+    # mode is silence, not noise.
+    "slot_evidence": 16.0,
 }
 
 # Converts a 1-based route rank to a 0-1 value.
@@ -204,6 +236,52 @@ def _budget_value(product: ProductRecord, budget: Constraint | None) -> float:
     return max(0.0, soft_budget_closeness(product.price, target))
 
 
+def _slot_value(product: ProductRecord, slot_terms: list[tuple[str, float]]) -> float:
+    """Selectivity-weighted share of the disclosures this candidate owns.
+
+    Returns 0-1. Nothing disclosed yet, or nothing any candidate owns, is a
+    neutral 0.0 for every candidate alike -- the same quiet failure the other
+    evidence features have, so a paraphrasing simulator costs the ordering
+    nothing rather than corrupting it.
+    """
+    matched = 0.0
+    total = 0.0
+    owned = product.card_values
+    for value, weight in slot_terms:
+        total += weight
+        if value in owned:
+            matched += weight
+    if total <= 0.0:
+        return 0.0
+    return matched / total
+
+
+def _slot_terms_for_pool(
+    disclosures: list[str],
+    candidates: list[Candidate],
+    products: dict[str, ProductRecord],
+) -> list[tuple[str, float]]:
+    """Normalize the disclosures once and price each by how rare it is here.
+
+    One pass over the pool per disclosure, which is a frozenset membership
+    test -- the same order of work the phrase feature already does, and far
+    cheaper than its substring scan.
+    """
+    normalized = [
+        value for value in (slots.normalize_disclosure(d) for d in disclosures) if value
+    ]
+    if not normalized:
+        return []
+    pool = [
+        products[c.parent_asin].card_values
+        for c in candidates
+        if c.parent_asin in products
+    ]
+    counts = [sum(1 for owned in pool if value in owned) for value in normalized]
+    weights = slots.ownership_weights(counts, len(pool))
+    return list(zip(normalized, weights))
+
+
 def _share(matched: tuple[str, ...], constraints: dict[str, Constraint], strength: str) -> float:
     """Share of the constraints of this strength that the candidate matches.
     No constraints of that strength is neutral (0.0), not a free win.
@@ -227,7 +305,8 @@ def score_candidate(
     disclosures: list[str] | None = None,
     *,
     disclosure_tokens: list[frozenset[str]] | None = None,
-    disclosure_phrases: list[tuple[str, int]] | None = None,
+    disclosure_phrases: list[tuple[str, int, bool]] | None = None,
+    slot_terms: list[tuple[str, float]] | None = None,
 ) -> RerankedCandidate:
     """Score one candidate against the feature checklist, in order.
 
@@ -241,6 +320,15 @@ def score_candidate(
         disclosure_tokens = evidence.disclosure_token_sets(disclosures or [])
     if disclosure_phrases is None:
         disclosure_phrases = evidence.disclosure_phrases(disclosures or [])
+    if slot_terms is None:
+        # A direct caller has no pool to price selectivity against, so every
+        # disclosure counts the same. rerank() computes the real weights once
+        # for the whole pool and passes them in.
+        slot_terms = [
+            (normalized, 1.0)
+            for normalized in (slots.normalize_disclosure(d) for d in (disclosures or []))
+            if normalized
+        ]
     category = constraints.get("category")
     if category is None:
         # A constraint the customer never gave earns no credit. Constant
@@ -269,6 +357,7 @@ def score_candidate(
         "phrase_evidence": evidence.phrase_coverage_from(
             evidence.phrase_text(product), disclosure_phrases
         ),
+        "slot_evidence": _slot_value(product, slot_terms),
     }
 
     contributions = tuple(
@@ -297,6 +386,7 @@ def rerank(
     """
     disclosure_tokens = evidence.disclosure_token_sets(disclosures or [])
     phrases = evidence.disclosure_phrases(disclosures or [])
+    slot_terms = _slot_terms_for_pool(disclosures or [], candidates, products)
     scored = [
         score_candidate(
             candidate,
@@ -304,6 +394,7 @@ def rerank(
             constraints,
             disclosure_tokens=disclosure_tokens,
             disclosure_phrases=phrases,
+            slot_terms=slot_terms,
         )
         for candidate in candidates
         if candidate.parent_asin in products

@@ -117,9 +117,23 @@ class EvidenceFeatureTest(unittest.TestCase):
         self.assertEqual(by_feature["constraint_evidence"], 0.0)
         self.assertEqual(a.score, b.score)
 
-    def test_the_adopted_weight_is_the_largest_in_the_table(self):
-        self.assertEqual(
-            max(FEATURE_WEIGHTS, key=FEATURE_WEIGHTS.get), "constraint_evidence"
+    def test_the_evidence_features_lead_the_table(self):
+        """P5 pinned constraint_evidence as the single largest weight. P6's
+        slot_evidence displaced it on measurement (+0.0316), so the invariant
+        worth holding is the general one the numbers actually support: what
+        the customer disclosed outranks every structural feature, and the
+        sharper evidence feature outranks the looser one."""
+        ordered = sorted(FEATURE_WEIGHTS, key=FEATURE_WEIGHTS.get, reverse=True)
+        self.assertEqual(ordered[0], "slot_evidence")
+        structural = {
+            name for name in FEATURE_WEIGHTS if not name.endswith("evidence")
+        }
+        weakest_evidence = min(
+            weight for name, weight in FEATURE_WEIGHTS.items()
+            if name.endswith("evidence")
+        )
+        self.assertGreater(
+            weakest_evidence, max(FEATURE_WEIGHTS[name] for name in structural)
         )
 
 
