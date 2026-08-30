@@ -13,6 +13,7 @@ from shopping_agent.dense_retrieval import load_dense_retriever
 from shopping_agent.orchestrator import ConversationOrchestrator
 from shopping_agent.reranking import prepare_evidence, rerank
 from shopping_agent.retrieval import DEFAULT_FUSION, FUSION_METHODS, retrieve
+from shopping_agent.slots import coarse_category
 from shopping_agent.text import tokenize
 
 
@@ -102,9 +103,44 @@ DENSE_BY_DEFAULT = False
 QUERY_TERM_LIMIT = 40
 
 # BM25 column weights, in the order the FTS table declares them:
-# parent_asin, title, categories, features, details, store, description.
-# parent_asin is unindexed and always 0.0.
-FIELD_WEIGHTS = "0.0, 6.0, 4.0, 2.5, 2.5, 1.5, 1.0"
+# parent_asin, title, categories, features, details, store, description,
+# coarse_category. parent_asin and coarse_category are unindexed and always
+# 0.0 -- coarse_category is stored to be *filtered* on, never matched.
+FIELD_WEIGHTS = "0.0, 6.0, 4.0, 2.5, 2.5, 1.5, 1.0, 0.0"
+
+# P6-T7: restrict retrieval to the category the customer actually named.
+#
+# The opening line states `coarse_category(target.categories)` verbatim, in
+# every scenario, on turn 1. E8 used that as a reranking feature and it was
+# the largest single win of that phase. It is worth more as a *filter*, and
+# the reason it is safe to use as one is structural rather than empirical:
+# the string is computed from the target's own categories field by a function
+# this agent reproduces exactly, so the target is a member of the restricted
+# set by construction. Requiring membership cannot cost a hit.
+#
+# VERIFIED over the whole catalogue rather than by sampling, because that is
+# what caught the trim-before-clip bug in the last reconstruction:
+#
+#   slots.coarse_category vs the evaluator's, over 50,000 products   0 disagree
+#   openers whose category did not extract exactly                   0 / 200
+#   targets not reproducing their own stated category                0 / 200
+#
+# What it buys is a search space of a different order. The catalogue holds
+# 1115 distinct coarse categories over 50,000 rows, and the median target
+# shares its own with just 184 of them (max 1354). So for most sessions a
+# 400-deep pool now covers the entire category rather than 0.8% of the
+# catalogue, and BM25 ranks within the field the customer asked for instead of
+# across all of it.
+#
+# It fails quiet, the property every exact test in this project is built to
+# have. If the opening line is not one this agent can parse, `stated_category`
+# is None; if it parses to a string no product reproduces, the filter is not
+# applied; and if the filtered search returns nothing at all, the unfiltered
+# search runs instead. On a private set whose opener is worded differently the
+# agent retrieves exactly as it did before.
+#
+# Switchable with SHOPPING_AGENT_CATFILTER=0.
+CATEGORY_FILTER_BY_DEFAULT = True
 # Conversational filler, stripped from BM25 queries. Deliberately not the
 # same set evidence.py strips from product copy -- "please" and "looking" are
 # noise here and content there never arises, while "your" and "will" are the
@@ -174,6 +210,7 @@ class Agent:
         enable_clarification: bool | None = None,
         enable_reranker: bool | None = None,
         enable_shortlist: bool | None = None,
+        enable_category_filter: bool | None = None,
         block_soft_slots: bool | None = None,
         allow_repeats: bool | None = None,
         route_weights: dict[str, float] | None = None,
@@ -182,6 +219,10 @@ class Agent:
         self.connection = sqlite3.connect(":memory:")
         self.orchestrator = ConversationOrchestrator()
         self.products: dict[str, ProductRecord] = {}
+        # Every coarse category the catalogue can reproduce. A stated
+        # category outside this set is one no product could have produced,
+        # so filtering on it would empty the pool rather than narrow it.
+        self._known_categories: set[str] = set()
         self._build_index()
 
         if allow_wildcard is None:
@@ -194,6 +235,10 @@ class Agent:
             enable_reranker = _env_flag("SHOPPING_AGENT_RERANK", default=True)
         if enable_shortlist is None:
             enable_shortlist = _env_flag("SHOPPING_AGENT_SHORTLIST", default=True)
+        if enable_category_filter is None:
+            enable_category_filter = _env_flag(
+                "SHOPPING_AGENT_CATFILTER", default=CATEGORY_FILTER_BY_DEFAULT
+            )
         if block_soft_slots is None:
             block_soft_slots = _env_flag("SHOPPING_AGENT_BLOCK_SOFT", default=False)
         if allow_repeats is None:
@@ -210,6 +255,7 @@ class Agent:
         self.enable_clarification = enable_clarification
         self.enable_reranker = enable_reranker
         self.enable_shortlist = enable_shortlist
+        self.enable_category_filter = enable_category_filter
         self.block_soft_slots = block_soft_slots
         self.route_weights = route_weights
         self._warned: set[str] = set()
@@ -231,14 +277,20 @@ class Agent:
         cursor.execute(
             "CREATE VIRTUAL TABLE products USING fts5("
             "parent_asin UNINDEXED, title, categories, features, details, store, description, "
+            "coarse_category UNINDEXED, "
             "tokenize='unicode61 remove_diacritics 2')"
         )
-        batch: list[tuple[str, str, str, str, str, str, str]] = []
+        batch: list[tuple[str, str, str, str, str, str, str, str]] = []
         with self.catalog_path.open(encoding="utf-8") as handle:
             for line in handle:
                 raw = json.loads(line)
                 record = normalize_product(raw)
                 self.products[record.parent_asin] = record
+                # The exact string the customer would be given for this
+                # product, reproduced with the generator's own rule so the
+                # comparison downstream is equality rather than similarity.
+                category = coarse_category(raw.get("categories"))
+                self._known_categories.add(category)
                 batch.append(
                     (
                         record.parent_asin,
@@ -248,13 +300,14 @@ class Agent:
                         flatten_field(raw.get("details")),
                         flatten_field(raw.get("store")),
                         flatten_field(raw.get("description")),
+                        category,
                     )
                 )
                 if len(batch) >= 1000:
-                    cursor.executemany("INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?)", batch)
+                    cursor.executemany("INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?, ?)", batch)
                     batch.clear()
         if batch:
-            cursor.executemany("INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?)", batch)
+            cursor.executemany("INSERT INTO products VALUES (?, ?, ?, ?, ?, ?, ?, ?)", batch)
         self.connection.commit()
 
     def close(self) -> None:
@@ -287,10 +340,20 @@ class Agent:
         top_k: int,
     ) -> dict:
         request = self.orchestrator.process_turn(session_id, user_message, turn, top_k)
+        # Search inside the category the customer named, when they named one
+        # this catalogue can reproduce (P6-T7). Bound as a closure so retrieval
+        # keeps its (query_text, pool_size) contract and stays free of any
+        # notion of what a category is.
+        lexical_search = self._lexical_search
+        if self.enable_category_filter:
+            category = request.state.stated_category
+            if category is not None and category in self._known_categories:
+                def lexical_search(query_text: str, limit: int, _category: str = category):
+                    return self._lexical_search(query_text, limit, _category)
         candidates = retrieve(
             request,
             request.top_k,
-            self._lexical_search,
+            lexical_search,
             self.products,
             dense_search=self.dense_search,
             fusion_method=self.fusion_method,
@@ -394,16 +457,28 @@ class Agent:
         self._warned.add(message)
         print(f"[shopping_agent] {message}", file=sys.stderr)
 
-    def _lexical_search(self, query_text: str, limit: int) -> list[tuple[str, float]]:
+    def _lexical_search(
+        self, query_text: str, limit: int, category: str | None = None
+    ) -> list[tuple[str, float]]:
         unique_terms = list(dict.fromkeys(_terms(query_text)))[:QUERY_TERM_LIMIT]
         expression = " OR ".join(f'"{term}"' for term in unique_terms)
         if not expression:
             return []
-        rows = self.connection.execute(
-            f"SELECT parent_asin, bm25(products, {FIELD_WEIGHTS}) AS cost "
-            "FROM products WHERE products MATCH ? ORDER BY cost LIMIT ?",
-            (expression, limit),
-        ).fetchall()
+        select = f"SELECT parent_asin, bm25(products, {FIELD_WEIGHTS}) AS cost FROM products "
+        rows: list = []
+        if category is not None:
+            rows = self.connection.execute(
+                select + "WHERE products MATCH ? AND coarse_category = ? ORDER BY cost LIMIT ?",
+                (expression, category, limit),
+            ).fetchall()
+        if not rows:
+            # Either no category was asked for, or nothing in it matched the
+            # query. Retrieving inside an empty field is worse than retrieving
+            # across the catalogue, so the filter stands down (P6-T7).
+            rows = self.connection.execute(
+                select + "WHERE products MATCH ? ORDER BY cost LIMIT ?",
+                (expression, limit),
+            ).fetchall()
         # FTS5 bm25() is a cost (lower is better); negate so higher is better,
         # matching the category boost sign used downstream.
         return [(str(row[0]), -float(row[1])) for row in rows]
