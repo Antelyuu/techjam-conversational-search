@@ -381,6 +381,23 @@ stays flat, because BM25 sharpens as rare terms accumulate whereas one fixed-wid
 sentence embedding averages a growing paragraph toward the corpus mean. P3's decision was
 not wrong; it expired.
 
+**E10 re-measured it again, and the number above no longer describes the agent that
+ships.** At the P6 ranking, against both a quoting and a paraphrasing customer:
+
+| | verbatim | paraphrased |
+|---|---|---|
+| dense off | **0.945497** | 0.696015 |
+| dense on | 0.944254 | 0.697829 |
+
+Dense costs **0.0012** today rather than 0.0509 — the evidence and category features added
+after E5 now do most of what the fusion was doing — and it *gains* 0.0018 once the customer
+stops quoting verbatim. Still off by default, because 0.0012 certain against 0.0018
+contingent needs roughly a 40% chance that the private set paraphrases to break even, and
+the flip would cost the headline HitRate of 1.000. The honest summary is that the route is
+now about free rather than expensive — a third distinct verdict on the same route, after
++0.0355 at P3 and -0.0509 at P5. Full table in
+[docs/experiments/E10-p6-paraphrase-robustness.md](docs/experiments/E10-p6-paraphrase-robustness.md).
+
 We kept the route, its flag and the prebuilt MiniLM artifact anyway, because the result is
 about this query distribution rather than about dense retrieval in general —
 `SHOPPING_AGENT_DENSE=1` turns it back on. Model choice, the rebuild procedure and the
@@ -451,11 +468,29 @@ of its value is genuinely about precision and how much comes from the break rule
 Slot ownership, phrase containment and the exact-category filter all depend on the
 simulator's verbatim behaviour. Each one fails quietly by design, so on a paraphrasing
 split every candidate scores 0.0 and the ranking falls back to the features underneath.
-But the ceiling would be lower and we cannot say by how much without such a split.
 
-*Given more time:* generate a paraphrased held-out split and measure the fallback ceiling
-directly, instead of arguing for it from construction. This is the most valuable thing we
-did not get to.
+**E10 measured that ceiling instead of arguing for it.** `scripts/paraphrase_eval.py`
+replays all 200 sessions through a paraphrasing customer, changing only the customer's
+outgoing text — the hidden card, the disclosure bookkeeping, the catalogue and the target
+are untouched, and level 0 reproduces 0.945497 exactly, which is what makes the rest
+trustworthy. Under synonym substitution the agent scores **0.696015** (HitRate 0.805)
+against 0.945497 verbatim. So roughly a quarter of the composite is genuinely resting on
+the customer quoting the target's own text back to us.
+
+It also found that the fallback was not as quiet as this section used to claim. "Fails
+quietly" is a property of a feature that only *scores*; the category apparatus is a
+*filter*, and standing down is not free — it returns retrieval to the whole catalogue.
+That accounted for 0.248 of the original 0.517 penalty, and it was recoverable, because
+the filter was keyed to one English lead-in and one exact spelling of the category.
+Accepting reworded openers and order-insensitive category names is worth **+0.2675
+paraphrased, and exactly 0.000000 on the public set** — the submission score, HitRate,
+MRR and MTTC are all identical to six decimals.
+
+*Given more time:* the remaining 0.269 is the paraphrased disclosures themselves. That
+needs stemming applied to both the FTS index and the evidence tokenizer together, or a
+constraint-evidence feature scored by embedding similarity rather than token containment.
+Full method, controls and held-out check in
+[docs/experiments/E10-p6-paraphrase-robustness.md](docs/experiments/E10-p6-paraphrase-robustness.md).
 
 ### No language understanding, and no free-form conversation
 
