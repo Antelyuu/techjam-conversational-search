@@ -21,6 +21,7 @@ from shopping_agent.reranking import (
     RELAXED_OWNERSHIP_THRESHOLD,
     DisclosureEvidence,
     prepare_evidence,
+    rerank,
     score_candidate,
     weights_for,
 )
@@ -89,6 +90,58 @@ class WeightProfileTest(unittest.TestCase):
             [c.feature for c in quoted.contributions],
             [c.feature for c in reworded.contributions],
         )
+
+
+class KillSwitchTest(unittest.TestCase):
+    """`paraphrase_profile=False` must revert the WHOLE feature.
+
+    It originally reverted only the weight table while the relaxed ownership
+    pass kept running, so the one parameter named after the feature could not
+    turn the feature off -- which is the first thing you would reach for if it
+    misfired on an unseen split. Every other policy in this agent has a
+    one-step revert."""
+
+    def products(self, *raws) -> dict:
+        return {r["parent_asin"]: normalize_product(r) for r in raws}
+
+    def test_disabling_the_profile_also_disables_graded_ownership(self):
+        products = self.products(
+            raw("a", features=["Machine wash cold with like colors"]),
+            raw("b", features=["Rubber outsole for traction"]),
+        )
+        candidates = [candidate("a"), candidate("b")]
+        disclosures = ["machine wash cold with colors"]
+        prepared = prepare_evidence(disclosures, candidates, products)
+        self.assertTrue(prepared.relaxed, "precondition: relaxation engages")
+
+        def slot_value(results, asin):
+            scored = next(r for r in results if r.parent_asin == asin)
+            return next(
+                c.value for c in scored.contributions
+                if c.feature == "slot_evidence"
+            )
+
+        on = rerank(candidates, products, {}, 10, prepared=prepared)
+        off = rerank(
+            candidates, products, {}, 10, prepared=prepared,
+            paraphrase_profile=False,
+        )
+        self.assertGreater(slot_value(on, "a"), 0.0)
+        self.assertEqual(slot_value(off, "a"), 0.0)
+
+    def test_disabling_the_profile_restores_the_public_weights(self):
+        products = self.products(raw("a", features=["Rubber sole"]))
+        candidates = [candidate("a")]
+        prepared = prepare_evidence(["nothing owns this wording"], candidates, products)
+        self.assertTrue(prepared.paraphrase_regime)
+        off = rerank(
+            candidates, products, {}, 10, prepared=prepared,
+            paraphrase_profile=False,
+        )
+        weight = next(
+            c.weight for c in off[0].contributions if c.feature == "lexical_rank"
+        )
+        self.assertEqual(weight, FEATURE_WEIGHTS["lexical_rank"])
 
 
 class OwnershipOverlapTest(unittest.TestCase):
