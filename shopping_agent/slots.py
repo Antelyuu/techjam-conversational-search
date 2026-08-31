@@ -304,6 +304,73 @@ def normalize_disclosure(text: str) -> str:
     return canonical(text)
 
 
+# P7-T3: token sets for approximate ownership, cached per distinct value.
+#
+# Bounded and cleared wholesale for the same reason evidence._TOKEN_CACHE is:
+# a long-lived process must not accrete a tokenized copy of every catalogue it
+# ever loads. Keyed on the value string rather than on any product id, so two
+# catalogues in one process -- which is what the tests are -- cannot serve
+# each other's tokens.
+_VALUE_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_VALUE_TOKEN_CACHE: dict[str, frozenset[str]] = {}
+_VALUE_TOKEN_CACHE_LIMIT = 200_000
+
+
+def value_tokens(value: str) -> frozenset[str]:
+    """The bare alphanumeric tokens of one card value."""
+    cached = _VALUE_TOKEN_CACHE.get(value)
+    if cached is None:
+        if len(_VALUE_TOKEN_CACHE) >= _VALUE_TOKEN_CACHE_LIMIT:
+            _VALUE_TOKEN_CACHE.clear()
+        cached = frozenset(_VALUE_TOKEN_RE.findall(value.lower()))
+        _VALUE_TOKEN_CACHE[value] = cached
+    return cached
+
+
+def ownership_overlap(value: str, owned: frozenset[str]) -> float:
+    """How nearly this candidate owns `value`, as a 0-1 score.
+
+    Exact ownership asks whether the candidate holds this string as a whole
+    field value of its own. That is the sharp question the public simulator
+    rewards, and it is worth +0.0316 there (E8) precisely because it is
+    all-or-nothing. It is also why the feature goes silent the moment the
+    customer rewords: change one word of a nine-word value and identity scores
+    the same zero as a completely unrelated product.
+
+    This is the graded version, for use only once a rewording has been
+    detected. It is the best Jaccard similarity between the disclosed value's
+    tokens and any single owned value's tokens.
+
+    **Jaccard rather than containment, deliberately.** Containment -- the
+    share of the disclosure's own tokens the owned value carries -- scores a
+    short disclosure fully contained in a long value at 1.0, so "cotton" would
+    perfectly "own" a candidate whose value reads "100% cotton blend twill
+    lining". That is exactly the impostor this project spent E7 and E8 killing
+    off, and it would be reintroduced here at the weight of the table's
+    dominant feature. Jaccard charges for the extra tokens as well as the
+    missing ones, scoring that pair 0.25 instead of 1.0.
+
+    Compared against every owned value and not merely the best-aligned one,
+    because the customer chooses which of the card's values to quote and the
+    agent does not know which.
+    """
+    wanted = value_tokens(value)
+    if not wanted:
+        return 0.0
+    best = 0.0
+    for candidate_value in owned:
+        have = value_tokens(candidate_value)
+        shared = len(wanted & have)
+        if not shared:
+            continue
+        score = shared / len(wanted | have)
+        if score > best:
+            best = score
+            if best == 1.0:
+                break
+    return best
+
+
 def ownership_weights(owner_counts: list[int], pool_size: int) -> list[float]:
     """How much each disclosure's ownership is worth, given how many pooled
     candidates own it.

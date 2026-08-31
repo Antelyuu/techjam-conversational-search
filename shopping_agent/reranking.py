@@ -239,6 +239,67 @@ FEATURE_WEIGHTS: dict[str, float] = {
     "category_exact": 8.0,
 }
 
+# P7-T2: the weights used instead when the customer is paraphrasing.
+#
+# The table above is tuned for a customer who quotes. Four of its five
+# heaviest features ask an exact-match question -- does this candidate *own*
+# this whole field value, does it *contain* this phrase, does it reproduce
+# this category string -- and the public simulator answers yes because it
+# builds its messages out of the target's own text. Reword the same messages
+# and those four stop discriminating, but they do not all fail the same way:
+#
+#   slot_evidence (16)        mostly silent; whole-value identity
+#   constraint_evidence (12)  scores partial token overlap, so a rewording
+#                             fills it with NOISE rather than silence
+#   category_exact (8)        inert once the E9 filter engages
+#   phrase_evidence (6)       silent to six decimals (E10)
+#   lexical_rank (1)          still carries real information
+#
+# So the paraphrased ranking is decided by the one feature holding the
+# smallest weight in the table, while the largest weights are split between
+# saying nothing and saying something wrong. E10 measured the target's median
+# rank under paraphrase at 28 against 2 verbatim, with pool recall 1.000 --
+# the product is in the pool and the panel is misreading it.
+#
+# E10 priced two unconditional repairs: lexical_rank 1.0 -> 4.0 at -0.00075
+# public / +0.0320 paraphrased, and constraint_evidence -> 0 at -0.0002 /
+# +0.0157. They overlap rather than add -- together they measured 0.7227,
+# *worse* than lexical_rank alone at 0.7280 -- so at most one is worth taking.
+#
+# Applying either conditionally makes the public cost exactly zero rather
+# than 0.00075, and that is not an estimate. The gate is the paraphrase
+# predicate E9 already counted over the whole public set: disclosures on
+# record that no pooled candidate owns fired on **0 of 2000 turns**
+# (shopping_agent/shortlist.py). A profile behind that gate cannot move a
+# score it is never applied to.
+#
+# Only keys already present in FEATURE_WEIGHTS may appear here; see
+# weights_for().
+PARAPHRASE_WEIGHTS: dict[str, float] = {
+    "lexical_rank": 4.0,
+}
+
+
+def weights_for(paraphrase_regime: bool) -> dict[str, float]:
+    """The feature weights to score with this turn.
+
+    Returns FEATURE_WEIGHTS itself -- not a copy -- when the regime has not
+    fired, so the quoting path allocates nothing and stays byte-identical.
+    """
+    if not paraphrase_regime:
+        return FEATURE_WEIGHTS
+    merged = dict(FEATURE_WEIGHTS)
+    merged.update(PARAPHRASE_WEIGHTS)
+    return merged
+
+
+# Guards the invariant weights_for() relies on: an override naming a feature
+# the checklist does not carry would silently add a contribution in one regime
+# and not the other, and explain() would disagree between turns.
+assert set(PARAPHRASE_WEIGHTS) <= set(FEATURE_WEIGHTS), (
+    "PARAPHRASE_WEIGHTS may only override features FEATURE_WEIGHTS defines"
+)
+
 # Converts a 1-based route rank to a 0-1 value.
 #
 # MEASURED: this was 60, mirroring the RRF constant, and that was the larger
@@ -354,6 +415,28 @@ class DisclosureEvidence:
     # identify a single product, and because the target owns all of its own
     # disclosures that product is the target whenever the target is pooled.
     consistent: int
+    # How many constraints the customer has stated at all, owned or not.
+    # `live_disclosures` alone cannot separate "nobody owns what was said"
+    # from "nothing has been said yet"; holding both is what makes the
+    # predicate below a measurement rather than a certainty.
+    disclosed: int = 0
+
+    @property
+    def paraphrase_regime(self) -> bool:
+        """Whether the customer appears to be rewording rather than quoting.
+
+        The customer has stated constraints and not one pooled candidate owns
+        any of them. On a quoting split that is close to impossible: the
+        simulator builds its messages out of the target's own field values, so
+        whenever the target is pooled it owns everything said. E9 counted this
+        predicate over the whole public set and it fired on **0 of 2000
+        turns**, which is what lets a weight profile behind it be inert by
+        construction rather than by tuning.
+
+        It is deliberately the same predicate shortlist.py already acts on, so
+        the two policies cannot disagree about which regime a turn is in.
+        """
+        return self.disclosed > 0 and self.live_disclosures == 0
 
 
 def prepare_evidence(
@@ -378,7 +461,7 @@ def prepare_evidence(
         if c.parent_asin in products
     ]
     if not normalized or not pool:
-        return DisclosureEvidence(tokens, phrases, [], 0, 0)
+        return DisclosureEvidence(tokens, phrases, [], 0, 0, len(normalized))
 
     counts = [sum(1 for owned in pool if value in owned) for value in normalized]
     weights = slots.ownership_weights(counts, len(pool))
@@ -387,7 +470,12 @@ def prepare_evidence(
         sum(1 for owned in pool if all(value in owned for value in live)) if live else 0
     )
     return DisclosureEvidence(
-        tokens, phrases, list(zip(normalized, weights)), len(live), consistent
+        tokens,
+        phrases,
+        list(zip(normalized, weights)),
+        len(live),
+        consistent,
+        len(normalized),
     )
 
 
@@ -417,6 +505,7 @@ def score_candidate(
     disclosure_phrases: list[tuple[str, int, bool]] | None = None,
     slot_terms: list[tuple[str, float]] | None = None,
     stated_category: str | None = None,
+    weights: dict[str, float] | None = None,
 ) -> RerankedCandidate:
     """Score one candidate against the feature checklist, in order.
 
@@ -475,8 +564,14 @@ def score_candidate(
         ),
     }
 
+    if weights is None:
+        weights = FEATURE_WEIGHTS
+    # Iterating FEATURE_WEIGHTS rather than `weights` keeps the checklist the
+    # same length and in the same order whichever regime is in force, so an
+    # explain() from a paraphrased turn lines up against one from a quoted
+    # turn feature for feature.
     contributions = tuple(
-        ScoreContribution(feature=feature, weight=FEATURE_WEIGHTS[feature], value=values[feature])
+        ScoreContribution(feature=feature, weight=weights[feature], value=values[feature])
         for feature in FEATURE_WEIGHTS
     )
     return RerankedCandidate(
@@ -494,6 +589,7 @@ def rerank(
     disclosures: list[str] | None = None,
     prepared: DisclosureEvidence | None = None,
     stated_category: str | None = None,
+    paraphrase_profile: bool = True,
 ) -> list[RerankedCandidate]:
     """Order the pool by the deterministic scorer and keep the top `limit`.
 
@@ -503,6 +599,11 @@ def rerank(
     """
     if prepared is None:
         prepared = prepare_evidence(disclosures or [], candidates, products)
+    # One decision for the whole pool, not per candidate: the regime is a
+    # property of what the customer said and what the pool holds, so scoring
+    # two candidates on the same turn under different weights would make the
+    # comparison between them meaningless.
+    weights = weights_for(paraphrase_profile and prepared.paraphrase_regime)
     scored = [
         score_candidate(
             candidate,
@@ -512,6 +613,7 @@ def rerank(
             disclosure_phrases=prepared.phrases,
             slot_terms=prepared.slot_terms,
             stated_category=stated_category,
+            weights=weights,
         )
         for candidate in candidates
         if candidate.parent_asin in products
