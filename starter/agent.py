@@ -10,6 +10,7 @@ from shopping_agent import clarification
 from shopping_agent import shortlist
 from shopping_agent.catalog import ProductRecord, flatten_field, normalize_product
 from shopping_agent.dense_retrieval import load_dense_retriever
+from shopping_agent.semantic_evidence import catalogue_values, load_semantic_scorer
 from shopping_agent.orchestrator import ConversationOrchestrator
 from shopping_agent.reranking import prepare_evidence, rerank
 from shopping_agent.retrieval import DEFAULT_FUSION, FUSION_METHODS, retrieve
@@ -108,6 +109,24 @@ RERANK_POOL = 400
 # stay in the repository: the finding is about this query distribution, and a
 # private set that asks fewer questions would move the balance back.
 DENSE_BY_DEFAULT = False
+
+# P7-T1: the semantic evidence feature is ON by default, which is the opposite
+# of the dense route's decision one section above and rests on a different
+# measurement. Dense costs 0.0012 on the public benchmark to buy 0.0018 under
+# paraphrase (E10) -- a bad trade. This costs **nothing** on the public
+# benchmark, because prepare_evidence gates it on slot ownership having gone
+# dark, and buys +0.1517 under paraphrase with HitRate 0.805 -> 0.975 (E11).
+#
+#   public          0.945297 / HitRate 1.000   (unchanged by this feature;
+#                                               the 0.0002 against E10 is
+#                                               constraint_evidence retiring)
+#   paraphrased L2  0.847762 / HitRate 0.975   (against 0.696015 / 0.805)
+#
+# Switchable off with SHOPPING_AGENT_SEMANTIC=0. The feature is also optional
+# by construction: with no artifact or no sentence-transformers installed it
+# scores 0.0 for everyone and the agent ranks exactly as it does with the flag
+# off, so a checkout that never runs the build still works.
+SEMANTIC_BY_DEFAULT = True
 
 # How many distinct query terms reach BM25.
 #
@@ -230,6 +249,7 @@ class Agent:
         enable_reranker: bool | None = None,
         enable_shortlist: bool | None = None,
         enable_category_filter: bool | None = None,
+        enable_semantic: bool | None = None,
         block_soft_slots: bool | None = None,
         allow_repeats: bool | None = None,
         route_weights: dict[str, float] | None = None,
@@ -292,6 +312,23 @@ class Agent:
         # BM25 lexical results instead of failing.
         self.dense_search = (
             load_dense_retriever(expected_ids=sorted(self.products)) if enable_dense else None
+        )
+
+        # P7-T1 (E11). On by default and optional by construction: None means
+        # the value artifact or sentence-transformers is missing, and the
+        # reranker then scores semantic_evidence 0.0 for every candidate,
+        # which is this agent exactly as it ranked before the feature existed.
+        # The artifact loads here, so a broken one is reported at startup
+        # rather than mid-run; the model itself loads on the first turn that
+        # actually has a disclosure to embed.
+        if enable_semantic is None:
+            enable_semantic = _env_flag(
+                "SHOPPING_AGENT_SEMANTIC", default=SEMANTIC_BY_DEFAULT
+            )
+        self.semantic_scorer = (
+            load_semantic_scorer(expected_values=catalogue_values(self.products))
+            if enable_semantic
+            else None
         )
 
     def _build_index(self) -> None:
@@ -404,7 +441,10 @@ class Agent:
             # into respond() and returning nothing (P4-T4).
             try:
                 prepared = prepare_evidence(
-                    request.state.disclosed_text, candidates, self.products
+                    request.state.disclosed_text,
+                    candidates,
+                    self.products,
+                    semantic_scorer=self.semantic_scorer,
                 )
                 live_disclosures = prepared.live_disclosures
                 consistent = prepared.consistent

@@ -40,6 +40,11 @@ class FallbackTest(unittest.TestCase):
 
     def agent(self, **kwargs):
         kwargs.setdefault("enable_dense", False)
+        # Off for the same reason dense is: these tests are not about
+        # the semantic feature, and leaving it on makes every agent
+        # here load a 66 MB artifact and a 340M-parameter model.
+        # tests/test_phase7_semantic_evidence.py covers it directly.
+        kwargs.setdefault("enable_semantic", False)
         instance = Agent(self.catalog_path, **kwargs)
         # Each test builds its own agent; without this every one leaks a
         # SQLite connection until collection, which shows up as ResourceWarning.

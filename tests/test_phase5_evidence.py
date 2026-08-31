@@ -121,21 +121,34 @@ class EvidenceFeatureTest(unittest.TestCase):
     # constraints they quoted (the three evidence features) and the category
     # they named (category_exact). Everything else is generic retrieval and
     # constraint machinery.
+    # P7 retired constraint_evidence to 0.0 (E11) and put semantic_evidence in
+    # its place, so the set of *live* disclosure features has changed
+    # membership. constraint_evidence stays in the table for inspectability
+    # but is deliberately excluded here: at 0.0 it carries no disclosure
+    # signal, and including it would make the invariant below unsatisfiable
+    # rather than false.
     DISCLOSURE_FEATURES = frozenset({
-        "slot_evidence", "constraint_evidence", "phrase_evidence", "category_exact",
+        "semantic_evidence", "slot_evidence", "phrase_evidence", "category_exact",
     })
+    RETIRED_FEATURES = frozenset({"constraint_evidence", "category"})
 
     def test_what_the_customer_said_outranks_the_structural_features(self):
         """P5 pinned constraint_evidence as the single largest weight. P6
         displaced it twice -- slot_evidence (+0.0316) then category_exact
-        (+0.0475) -- so the invariant worth holding is the general one the
-        numbers support across all three phases: signals carrying what the
-        customer actually told us outrank every structural feature, and the
-        sharpest of them leads."""
+        (+0.0475) -- and P7 displaced it again with semantic_evidence, which
+        asks constraint_evidence's own question with a matcher that survives
+        paraphrase. The invariant worth holding is the general one the numbers
+        support across all four phases: signals carrying what the customer
+        actually told us outrank every structural feature, and the sharpest of
+        them leads."""
         ordered = sorted(FEATURE_WEIGHTS, key=FEATURE_WEIGHTS.get, reverse=True)
-        self.assertEqual(ordered[0], "slot_evidence")
-        structural = set(FEATURE_WEIGHTS) - self.DISCLOSURE_FEATURES
+        self.assertEqual(ordered[0], "semantic_evidence")
+        structural = set(FEATURE_WEIGHTS) - self.DISCLOSURE_FEATURES - self.RETIRED_FEATURES
         self.assertTrue(self.DISCLOSURE_FEATURES <= set(FEATURE_WEIGHTS))
+        # A retired feature stays in the table so explain() can still show it;
+        # if one is ever revived, this fails and the sets above get revisited.
+        for name in self.RETIRED_FEATURES:
+            self.assertEqual(FEATURE_WEIGHTS[name], 0.0, name)
         self.assertGreater(
             min(FEATURE_WEIGHTS[name] for name in self.DISCLOSURE_FEATURES),
             max(FEATURE_WEIGHTS[name] for name in structural),

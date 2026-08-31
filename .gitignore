@@ -17,11 +17,17 @@ data/releases/
 # runtime. bge-small is excluded: that model line was discontinued by team
 # decision (E1) and its artifact is 73 MB.
 data/embeddings/bge-small-en-v1.5.*
-# Value-level embedding artifacts (E11): one vector per distinct card value,
-# 268,564 of them, so 393 MB at MiniLM's 384 dimensions and more at Voyage's
-# 2048. Research artifacts, rebuildable from scripts/build_value_embeddings.py.
-# Whether any shippable form of these is committed is a separate decision --
-# only a 256-dimension int8 build fits GitHub's 100 MB per-file limit.
+# Full-precision value-level artifacts (E11): one vector per distinct card
+# value, 268,564 of them, so 393 MB at 384 dimensions and 2.1 GB at Voyage's
+# native 2048. These are the comparison builds, rebuildable with
+# scripts/build_value_embeddings.py, and none of them can be committed.
+#
+# The *shipped* artifact is deliberately not matched by these patterns:
+# data/embeddings/voyage-4-nano-values256.npy is 66 MB -- Matryoshka-truncated
+# to 256 dimensions and stored int8 -- and is tracked, like the MiniLM dense
+# artifact beside it, so a fresh checkout has the feature without a rebuild.
+# Its .values.json is not needed at runtime either: the agent derives the row
+# labelling from the catalogue it already loads (semantic_evidence.catalogue_values).
 data/embeddings/*-values.npy
 data/embeddings/*-values.values.json
 SHA256SUMS

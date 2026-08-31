@@ -1,0 +1,8 @@
+{
+  "derived_from": "voyage-4-nano-values",
+  "values": 268564,
+  "dimensions": 256,
+  "precision": "int8",
+  "quantization_scale": 387.9558405003226,
+  "megabytes": 65.6
+}

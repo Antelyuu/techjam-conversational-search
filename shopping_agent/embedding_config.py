@@ -38,3 +38,34 @@ def ids_path(embedding_dir: Path | str = EMBEDDING_DIR) -> Path:
 
 def metadata_path(embedding_dir: Path | str = EMBEDDING_DIR) -> Path:
     return Path(embedding_dir) / f"{MODEL_SLUG}.meta.json"
+
+
+# ---------------------------------------------------------------------------
+# The value-level artifact (P7, E11), which is a different model doing a
+# different job and so is configured separately from the dense route above.
+#
+# The dense route embeds one vector per *product* and answers "what is this
+# query about". This embeds one vector per distinct *card value* and answers
+# "does this candidate own a field value that means what the customer just
+# said" -- the semantic form of the question slots.py asks exactly.
+#
+# voyage-4-nano rather than MiniLM on measurement, not reputation (E11):
+# 0.862054 paraphrased against MiniLM's 0.799906 and bge-small's 0.825260, and
+# it is the only one of the three whose artifact fits the repository. Its
+# Matryoshka training lets the 2048-dimension build be cut to 256, and its
+# quantization-aware training lets that be stored int8, which is 66 MB against
+# 393 MB for either 384-dimension alternative at float32.
+VALUE_MODEL_ID = "voyageai/voyage-4-nano"
+VALUE_MODEL_SLUG = "voyage-4-nano-values256"
+
+
+def value_vectors_path(embedding_dir: Path | str = EMBEDDING_DIR) -> Path:
+    return Path(embedding_dir) / f"{VALUE_MODEL_SLUG}.npy"
+
+
+def value_strings_path(embedding_dir: Path | str = EMBEDDING_DIR) -> Path:
+    return Path(embedding_dir) / f"{VALUE_MODEL_SLUG}.values.json"
+
+
+def value_metadata_path(embedding_dir: Path | str = EMBEDDING_DIR) -> Path:
+    return Path(embedding_dir) / f"{VALUE_MODEL_SLUG}.meta.json"

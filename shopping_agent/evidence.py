@@ -121,6 +121,23 @@ def disclosure_token_sets(disclosures: list[str]) -> list[frozenset[str]]:
     return sets
 
 
+def disclosure_weights(disclosures: list[str]) -> list[tuple[str, float]]:
+    """(text, content weight) for the disclosures worth scoring.
+
+    The semantic feature needs the disclosure's *original text* -- it has to be
+    embedded -- alongside the same weight the token and phrase features give
+    it, and behind the same MIN_EVIDENCE_TOKENS floor. Deriving all three from
+    this one rule is what stops semantic_evidence and constraint_evidence
+    disagreeing about which disclosures count (the review finding that made
+    disclosure_phrases share the floor in P5)."""
+    weighted = []
+    for disclosure in disclosures:
+        weight = len(frozenset(_content_tokens(disclosure)))
+        if weight >= MIN_EVIDENCE_TOKENS:
+            weighted.append((disclosure, float(weight)))
+    return weighted
+
+
 def coverage_from_sets(tokens: frozenset[str], wanted_sets: list[frozenset[str]]) -> float:
     """How completely a token set accounts for the disclosed constraints.
 

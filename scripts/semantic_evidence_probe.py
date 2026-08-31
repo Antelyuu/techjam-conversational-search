@@ -28,11 +28,20 @@ Nothing in shopping_agent/ changes. FEATURE_WEIGHTS is patched in place and
 rerank is wrapped, the same way scripts/paraphrase_weight_probe.py does it,
 so this measures a candidate change without being one.
 
-**The control that makes the rest trustworthy** is `--weight 0
---keep-token-feature`: the wrapper still runs but contributes nothing, and it
-must reproduce the shipped score to six decimals (0.945497 at level 0,
-0.696015 at level 2). If it does not, the harness is adding something of its
-own and every delta from it is void.
+**The control that makes the rest trustworthy** is `--weight 0`: the wrapper
+still runs but contributes nothing, so it must reproduce whatever the shipped
+table scores, to six decimals. If it does not, the harness is adding something
+of its own and every delta from it is void.
+
+What "the shipped table" means moved once, and the numbers here are from
+before it moved. E11's measurements were taken against the pre-E11 ranking, in
+which `constraint_evidence` was still 12.0 and there was no semantic feature;
+the control then reproduced **0.945497** at level 0 and **0.696015** at level
+2. Since E11 shipped, `constraint_evidence` is 0.0 and `semantic_evidence`
+scores from the agent's own artifact, so the control reproduces the current
+configuration instead. The agent's scorer is dropped inside the wrapper below,
+so a probe run measures exactly one semantic feature -- its own -- rather than
+stacking two.
 
 Usage:
     python3 -m scripts.semantic_evidence_probe --model minilm --level 2 --weight 24
@@ -200,8 +209,12 @@ def install(scorer: SemanticEvidence, weight: float, keep_token_feature: bool) -
     real_prepare = reranking.prepare_evidence
     real_rerank = reranking.rerank
 
-    def prepare_evidence(disclosures, candidates, products):
+    def prepare_evidence(disclosures, candidates, products, semantic_scorer=None):
         _CURRENT["disclosures"] = list(disclosures or [])
+        # The agent's own scorer is deliberately dropped. This probe measures
+        # a *candidate* configuration -- its own model, dimension and weight --
+        # and letting the shipped one score as well would stack two semantic
+        # features and quietly measure neither.
         return real_prepare(disclosures, candidates, products)
 
     def rerank(candidates, products, constraints, limit,

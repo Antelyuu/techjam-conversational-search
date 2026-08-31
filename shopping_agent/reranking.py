@@ -29,7 +29,7 @@ No model, no network, no learned parameters.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from . import evidence
 from . import slots
@@ -111,7 +111,23 @@ FEATURE_WEIGHTS: dict[str, float] = {
     # nothing -- a different hidden evaluator, a less verbatim customer -- the
     # feature scores ~0 for every candidate and the ordering falls back to the
     # features beneath it. The failure mode is silence, not noise.
-    "constraint_evidence": 12.0,
+    #
+    # RETIRED to 0.0 (E11), and the paragraph above is why -- it turned out to
+    # be wrong about this feature specifically. E10 tested the "failure mode is
+    # silence" claim for the first time and found it true of phrase_evidence,
+    # true enough of slot_evidence, and **false here**: this scores *partial*
+    # token coverage, so a paraphrase does not zero it, it fills it with
+    # whichever words survived the rewording. Measured at level 2, zeroing it
+    # moved the paraphrased score 0.696015 -> 0.711681. At 12.0 it was not
+    # silence, it was noise with a loud voice.
+    #
+    # semantic_evidence below replaces it: the same question -- how much of
+    # what the customer said does this candidate account for -- asked with a
+    # matcher that survives rewording. Kept in the table at 0.0 rather than
+    # deleted, so explain() still shows what token containment would have said
+    # and the retirement is legible rather than silent, the same way `category`
+    # has been kept at 0.0 since E4.
+    "constraint_evidence": 0.0,
     # E7, the second half of the evidence story. Token coverage ties at ~1.0
     # across near-duplicate catalogue copy, and the enlarged pool (RERANK_POOL
     # 100) admits more such impostors; contiguous containment of the quoted
@@ -237,6 +253,37 @@ FEATURE_WEIGHTS: dict[str, float] = {
     # again and this is exactly the feature that used to be worth +0.0475.
     # Inert here costs nothing; absent there would cost that.
     "category_exact": 8.0,
+    # P7-T1 (E11), the replacement for constraint_evidence above. Cosine
+    # between the disclosed sentence and the candidate's own card values, at
+    # the granularity slot_evidence uses -- see shopping_agent/semantic_
+    # evidence.py for the form and the reasoning.
+    #
+    # MEASURED (E11) at level 2, sweeping this weight alone, with
+    # constraint_evidence already at 0.0:
+    #
+    #   weight  24        96        192       384       768
+    #   score   0.834479  0.856548  0.862054  0.858238  0.856843
+    #   HitRate 0.945     0.970     0.975     0.975     0.975
+    #
+    # A plateau spanning 192-768; 192 is its first point and best value.
+    #
+    # The number is large because the scale is different in kind from every
+    # other feature here. The others are 0-1 *coverage* values that reach 1.0
+    # on a real match and 0.0 on none. A cosine between two short shopping
+    # phrases lives in a narrow band well above zero -- voyage-4-nano's
+    # asymmetric query and document prompts mean even an identical string
+    # self-scores 0.76 -- so the usable spread is a fraction of the range and
+    # the weight has to be correspondingly larger to buy the same separation.
+    # The optimum is model-specific for exactly this reason: MiniLM plateaus
+    # at 24-32 and bge-small at 96-192 on the same task (E11), so this weight
+    # and VALUE_MODEL_ID have to move together.
+    #
+    # Fails quiet, and this one is load-bearing rather than assumed: if the
+    # artifact or sentence-transformers is missing, load_semantic_scorer()
+    # returns None, prepare_evidence leaves `semantic` empty, and every
+    # candidate scores 0.0 -- which is the agent exactly as it ranked before
+    # this feature existed.
+    "semantic_evidence": 192.0,
 }
 
 # Converts a 1-based route rank to a 0-1 value.
@@ -354,12 +401,19 @@ class DisclosureEvidence:
     # identify a single product, and because the target owns all of its own
     # disclosures that product is the target whenever the target is pooled.
     consistent: int
+    # {parent_asin: 0-1} from the semantic scorer. Last, and defaulted, so a
+    # caller that predates the feature -- the tests, and any direct user of
+    # prepare_evidence -- keeps working and simply scores it 0.0 for
+    # everyone, which is the same neutral value the other evidence features
+    # use when they have nothing to say.
+    semantic: dict[str, float] = field(default_factory=dict)
 
 
 def prepare_evidence(
     disclosures: list[str],
     candidates: list[Candidate],
     products: dict[str, ProductRecord],
+    semantic_scorer=None,
 ) -> DisclosureEvidence:
     """Normalize the disclosures once and price each by how rare it is here.
 
@@ -372,13 +426,24 @@ def prepare_evidence(
     ]
     tokens = evidence.disclosure_token_sets(disclosures)
     phrases = evidence.disclosure_phrases(disclosures)
+
+    # Computed before the early return below, because the two are independent:
+    # slot ownership can have nothing to say -- which is exactly what happens
+    # when the customer paraphrases -- while the semantic feature still does.
+    # No scorer means an empty map, which scores 0.0 for everyone.
+    semantic: dict[str, float] = {}
+    if semantic_scorer is not None:
+        semantic = semantic_scorer(
+            disclosures, candidates, products, evidence.disclosure_weights(disclosures)
+        )
+
     pool = [
         products[c.parent_asin].card_values
         for c in candidates
         if c.parent_asin in products
     ]
     if not normalized or not pool:
-        return DisclosureEvidence(tokens, phrases, [], 0, 0)
+        return DisclosureEvidence(tokens, phrases, [], 0, 0, semantic)
 
     counts = [sum(1 for owned in pool if value in owned) for value in normalized]
     weights = slots.ownership_weights(counts, len(pool))
@@ -386,8 +451,36 @@ def prepare_evidence(
     consistent = (
         sum(1 for owned in pool if all(value in owned for value in live)) if live else 0
     )
+
+    # The semantic feature is scaled by the share of disclosures **no pooled
+    # candidate owns**, so it speaks exactly as loudly as slot ownership is
+    # silent. This is E10's option 3 -- shortlist.py already computes the same
+    # "disclosed something, nobody owns any of it" signal -- and it is what
+    # makes the feature free on a quoting customer rather than merely cheap.
+    #
+    # Why it is needed. At weight 192 the feature outweighs slot_evidence (16)
+    # by an order of magnitude, which is right when ownership has gone dark
+    # and wrong when it has not: on the verbatim set the exact features have
+    # already found the target, and an ungated semantic score can outvote
+    # them. MEASURED (E11), voyage-4-nano at 256 dimensions:
+    #
+    #                  public              paraphrased (L2)
+    #   ungated        0.941680 / 0.995    0.839235 / 0.965
+    #   hard gate      0.945297 / 1.000    0.836785 / 0.965
+    #   soft gate      0.945297 / 1.000    0.847762 / 0.975
+    #
+    # The soft gate is better on both sides at once, which is rare enough to
+    # state plainly: it recovers the public HitRate 1.000 the ungated form
+    # loses *and* gains 0.0085 under paraphrase over it. The hard gate -- all
+    # or nothing on live_disclosures == 0 -- is worse than either, because a
+    # partly-reworded turn has some disclosures still owned and the hard form
+    # switches the feature off exactly when it is half needed.
+    if semantic and normalized and live:
+        unowned_share = (len(normalized) - len(live)) / len(normalized)
+        semantic = {asin: value * unowned_share for asin, value in semantic.items()}
+
     return DisclosureEvidence(
-        tokens, phrases, list(zip(normalized, weights)), len(live), consistent
+        tokens, phrases, list(zip(normalized, weights)), len(live), consistent, semantic
     )
 
 
@@ -417,6 +510,7 @@ def score_candidate(
     disclosure_phrases: list[tuple[str, int, bool]] | None = None,
     slot_terms: list[tuple[str, float]] | None = None,
     stated_category: str | None = None,
+    semantic_value: float = 0.0,
 ) -> RerankedCandidate:
     """Score one candidate against the feature checklist, in order.
 
@@ -473,6 +567,12 @@ def score_candidate(
             if stated_category and product.coarse_category == stated_category
             else 0.0
         ),
+        # Scored once for the whole pool in prepare_evidence and handed in,
+        # because the scorer batches the pool into one matrix multiply and a
+        # per-candidate call would undo that. A direct caller that has no
+        # prepared evidence leaves it 0.0, the same neutral value the other
+        # evidence features take when they have nothing to say.
+        "semantic_evidence": semantic_value,
     }
 
     contributions = tuple(
@@ -512,6 +612,7 @@ def rerank(
             disclosure_phrases=prepared.phrases,
             slot_terms=prepared.slot_terms,
             stated_category=stated_category,
+            semantic_value=prepared.semantic.get(candidate.parent_asin, 0.0),
         )
         for candidate in candidates
         if candidate.parent_asin in products

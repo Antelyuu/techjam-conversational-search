@@ -69,6 +69,11 @@ class _CategoryFixture:
 
     def agent(self, **kwargs):
         kwargs.setdefault("enable_dense", False)
+        # Off for the same reason dense is: these tests are not about
+        # the semantic feature, and leaving it on makes every agent
+        # here load a 66 MB artifact and a 340M-parameter model.
+        # tests/test_phase7_semantic_evidence.py covers it directly.
+        kwargs.setdefault("enable_semantic", False)
         # These tests are about what retrieval puts in the pool, so the
         # shortlist policy is held out of the way: it would otherwise truncate
         # turn 1 to a single recommendation and every assertion below about

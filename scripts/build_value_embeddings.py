@@ -184,6 +184,56 @@ def build(
     return metadata
 
 
+def derive(
+    source_slug: str,
+    truncate_dim: int,
+    target_slug: str,
+    embedding_dir: str | Path = EMBEDDING_DIR,
+) -> dict:
+    """Cut a smaller artifact out of a bigger one, without re-encoding.
+
+    Matryoshka training puts the coarse information in the leading dimensions,
+    so a 256-dimension artifact is the first 256 columns of the 2048-dimension
+    one, renormalized. Quantizing to int8 afterwards is what brings 268,564
+    rows under GitHub's 100 MB per-file limit: 66 MB against 262 MB at float32.
+
+    Symmetric int8 with one global scale, which is enough here because the rows
+    are unit vectors and every component is already in [-1, 1]. MEASURED (E11):
+    the quantized artifact scores 0.839235 against float32's 0.839229 under
+    paraphrase, and the mean cosine between a quantized row and its float32
+    original is 0.999929. voyage-4-nano is quantization-aware trained and
+    documents int8 as a supported precision, which is why this is nearly free.
+    """
+    import numpy as np
+
+    directory = Path(embedding_dir)
+    matrix = np.load(directory / f"{source_slug}.npy")
+    if truncate_dim:
+        matrix = matrix[:, :truncate_dim]
+    matrix = matrix.astype("float32")
+    matrix /= np.linalg.norm(matrix, axis=1, keepdims=True).clip(min=1e-12)
+
+    scale = 127.0 / float(np.abs(matrix).max())
+    quantized = np.clip(np.round(matrix * scale), -127, 127).astype("int8")
+
+    np.save(directory / f"{target_slug}.npy", quantized)
+    (directory / f"{target_slug}.values.json").write_bytes(
+        (directory / f"{source_slug}.values.json").read_bytes()
+    )
+    metadata = {
+        "derived_from": source_slug,
+        "values": int(quantized.shape[0]),
+        "dimensions": int(quantized.shape[1]),
+        "precision": "int8",
+        # Dequantize with vector / quantization_scale, then renormalize.
+        "quantization_scale": scale,
+        "megabytes": round(quantized.nbytes / 1024 / 1024, 1),
+    }
+    (directory / f"{target_slug}.meta.json").write_text(json.dumps(metadata, indent=2))
+    print(f"wrote {target_slug}.npy {quantized.shape} -- {json.dumps(metadata)}", flush=True)
+    return metadata
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default="minilm", choices=sorted(MODELS))
@@ -193,7 +243,18 @@ def main() -> None:
         "--dim", type=int, default=0,
         help="Matryoshka output dimension (voyage only; 0 keeps the native 2048)",
     )
+    parser.add_argument(
+        "--derive-from", default="",
+        help="slug of an existing artifact to truncate and quantize instead of "
+             "encoding from scratch",
+    )
+    parser.add_argument("--target-slug", default="", help="output slug for --derive-from")
     args = parser.parse_args()
+
+    if args.derive_from:
+        target = args.target_slug or f"{args.derive_from}-{args.dim or 'full'}-int8"
+        derive(args.derive_from, args.dim, target)
+        return
     build(args.model, args.catalog, batch_size=args.batch, truncate_dim=args.dim)
 
 
