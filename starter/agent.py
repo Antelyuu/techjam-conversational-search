@@ -13,7 +13,7 @@ from shopping_agent.dense_retrieval import load_dense_retriever
 from shopping_agent.orchestrator import ConversationOrchestrator
 from shopping_agent.reranking import prepare_evidence, rerank
 from shopping_agent.retrieval import DEFAULT_FUSION, FUSION_METHODS, retrieve
-from shopping_agent.slots import coarse_category
+from shopping_agent.slots import canonical_category, coarse_category
 from shopping_agent.text import tokenize
 
 
@@ -238,10 +238,13 @@ class Agent:
         self.connection = sqlite3.connect(":memory:")
         self.orchestrator = ConversationOrchestrator()
         self.products: dict[str, ProductRecord] = {}
-        # Every coarse category the catalogue can reproduce. A stated
-        # category outside this set is one no product could have produced,
-        # so filtering on it would empty the pool rather than narrow it.
+        # Every coarse category the catalogue can reproduce, and the same set
+        # again keyed by canonical form. A stated category that matches
+        # neither is one no product could have produced, so filtering on it
+        # would empty the pool rather than narrow it. See
+        # _resolve_categories for which of the two is consulted when.
         self._known_categories: set[str] = set()
+        self._categories_by_canonical: dict[str, set[str]] = {}
         self._build_index()
 
         if allow_wildcard is None:
@@ -310,6 +313,9 @@ class Agent:
                 # comparison downstream is equality rather than similarity.
                 category = coarse_category(raw.get("categories"))
                 self._known_categories.add(category)
+                self._categories_by_canonical.setdefault(
+                    canonical_category(category), set()
+                ).add(category)
                 batch.append(
                     (
                         record.parent_asin,
@@ -365,10 +371,12 @@ class Agent:
         # notion of what a category is.
         lexical_search = self._lexical_search
         if self.enable_category_filter:
-            category = request.state.stated_category
-            if category is not None and category in self._known_categories:
-                def lexical_search(query_text: str, limit: int, _category: str = category):
-                    return self._lexical_search(query_text, limit, _category)
+            categories = self._resolve_categories(request.state.stated_category)
+            if categories:
+                def lexical_search(
+                    query_text: str, limit: int, _categories: tuple[str, ...] = categories
+                ):
+                    return self._lexical_search(query_text, limit, _categories)
         candidates = retrieve(
             request,
             request.top_k,
@@ -476,8 +484,34 @@ class Agent:
         self._warned.add(message)
         print(f"[shopping_agent] {message}", file=sys.stderr)
 
+    def _resolve_categories(self, stated: str | None) -> tuple[str, ...]:
+        """The catalogue categories to search inside, given what was stated.
+
+        Exact agreement first, because that is the case the filter was
+        measured on and the one the target satisfies by construction. Only
+        when the stated string names nothing this catalogue spells does the
+        canonical form get a second look -- a customer who says "Boots Shoes"
+        for "Shoes Boots" has named the same shelf, and matching the sorted
+        tokens recovers it without loosening the exact test that runs first.
+
+        Returns every category sharing the canonical form, not an arbitrary
+        one of them, so the nine word-order pairs in the catalogue are
+        searched together rather than one being picked over the other.
+
+        Empty means the filter does not apply, which is the same quiet
+        failure it always had: an opener this agent cannot parse, or a
+        category no product reproduces, retrieves across the whole catalogue
+        exactly as it did before P6-T7.
+        """
+        if not stated:
+            return ()
+        if stated in self._known_categories:
+            return (stated,)
+        siblings = self._categories_by_canonical.get(canonical_category(stated))
+        return tuple(sorted(siblings)) if siblings else ()
+
     def _lexical_search(
-        self, query_text: str, limit: int, category: str | None = None
+        self, query_text: str, limit: int, category: str | tuple[str, ...] | None = None
     ) -> list[tuple[str, float]]:
         unique_terms = list(dict.fromkeys(_terms(query_text)))[:QUERY_TERM_LIMIT]
         expression = " OR ".join(f'"{term}"' for term in unique_terms)
@@ -485,10 +519,14 @@ class Agent:
             return []
         select = f"SELECT parent_asin, bm25(products, {FIELD_WEIGHTS}) AS cost FROM products "
         rows: list = []
-        if category is not None:
+        wanted = (category,) if isinstance(category, str) else tuple(category or ())
+        if wanted:
+            placeholders = ", ".join("?" * len(wanted))
             rows = self.connection.execute(
-                select + "WHERE products MATCH ? AND coarse_category = ? ORDER BY cost LIMIT ?",
-                (expression, category, limit),
+                select
+                + f"WHERE products MATCH ? AND coarse_category IN ({placeholders}) "
+                + "ORDER BY cost LIMIT ?",
+                (expression, *wanted, limit),
             ).fetchall()
         if not rows:
             # Either no category was asked for, or nothing in it matched the

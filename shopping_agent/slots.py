@@ -95,10 +95,59 @@ _FALLBACK_CATEGORY = "clothing item"
 #   "I'm looking for {category}. {old_value}"
 #
 # The category never contains a comma -- coarse_category() splits on commas
-# and rejoins with spaces -- so the first ", but" or sentence break ends it.
+# and rejoins with spaces -- so the first comma or sentence break ends it.
+#
+# MEASURED (E10): this used to accept the lead-in "I'm looking for" and
+# nothing else, which made the whole category apparatus -- the retrieval
+# filter of P6-T7 and the `category_exact` feature -- contingent on one
+# English phrase. scripts/paraphrase_eval.py rewords the opener at level 1
+# and above, and 0 of 200 openers then parsed; every paraphrased session ran
+# with the filter stood down. Isolating that (--keep-opener) priced it at
+# 0.248 composite, about half of the entire paraphrase penalty and larger
+# than any other single effect measured on this task.
+#
+# Widened to the lead-ins a rewording of "I'm looking for" actually produces.
+# The alternation is ordered longest-first so a prefix cannot shadow a longer
+# lead-in, and the terminator now ends at any comma rather than only ", but",
+# which the category cannot contain by construction.
+#
+# VERIFIED to be a strict superset rather than a behaviour change, over the
+# real coarse categories of all 200 public targets:
+#
+#   public-shaped openers where old and new disagree     0 / 600
+#   reworded openers the new form recovers exactly     800 / 800
+#
+# "show me ..." is deliberately absent. It is the one lead-in that routinely
+# introduces something that is not a category ("show me something for
+# running"), and tests/test_phase6_category_filter.py guards that case.
 _STATED_CATEGORY_RE = re.compile(
-    r"^\s*i'?m looking for\s+(.+?)\s*(?:,\s*but\b|\.(?:\s|$)|$)", re.IGNORECASE
+    r"^\s*(?:"
+    r"i\s*'?\s*m\s+looking\s+for|i\s+am\s+looking\s+for|"
+    r"i\s*'?\s*m\s+searching\s+for|i\s*'?\s*m\s+shopping\s+for|"
+    r"i\s*'?\s*m\s+after|i\s*'?\s*d\s+like|"
+    r"looking\s+for|i\s+want|i\s+need"
+    r")\s+(.+?)\s*(?:,|\.(?:\s|$)|\s+[\u2014\u2013]|\s+-\s|$)",
+    re.IGNORECASE,
 )
+
+# Order- and punctuation-insensitive form of a category string.
+#
+# The category the customer is handed is compared to the catalogue's own by
+# *equality* -- that exactness is what makes the filter safe (the target
+# reproduces its own category character for character). It is also the whole
+# of its fragility: "Shoes Boots" and "Boots Shoes" name the same shelf and
+# fail to match. Sorting the tokens keeps the comparison exact while dropping
+# the one distinction a reworded category loses.
+#
+# It collapses 1115 catalogue categories onto 1106 canonical forms; all 9
+# collisions are word-order pairs of each other ("Shoes Clogs & Mules" /
+# "Shoes Mules & Clogs"), which is the distinction this is meant to ignore.
+_CANONICAL_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def canonical_category(text: str) -> str:
+    """The form two spellings of the same category agree on."""
+    return " ".join(sorted(_CANONICAL_TOKEN_RE.findall((text or "").lower())))
 
 
 def coarse_category(value: object) -> str:

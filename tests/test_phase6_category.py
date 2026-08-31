@@ -149,5 +149,39 @@ class CategoryFeatureTest(unittest.TestCase):
         self.assertEqual(FEATURE_WEIGHTS["category"], 0.0)
 
 
+class CanonicalCategoryTest(unittest.TestCase):
+    """E10: the form two spellings of the same shelf agree on.
+
+    This exists to be the *second* test the agent tries, never the first --
+    see starter.Agent._resolve_categories. What is pinned here is only that
+    it ignores word order and punctuation and nothing else.
+    """
+
+    def test_it_ignores_word_order_and_punctuation(self):
+        for a, b in (
+            ("Shoes Boots", "Boots Shoes"),
+            ("Swim One Pieces", "Swim One-Pieces"),
+            ("Jackets & Coats Vests", "Coats Jackets & Vests"),
+            ("Shoes Athletic Running", "  athletic   running shoes "),
+        ):
+            self.assertEqual(
+                slots.canonical_category(a), slots.canonical_category(b), (a, b)
+            )
+
+    def test_it_does_not_collapse_different_shelves(self):
+        for a, b in (
+            ("Shoes Boots", "Shoes Sandals"),
+            ("Socks Athletic Socks", "Shoes Athletic Running"),
+            ("Shoes Boots", "Shoes Boot"),
+        ):
+            self.assertNotEqual(
+                slots.canonical_category(a), slots.canonical_category(b), (a, b)
+            )
+
+    def test_nothing_stated_is_the_empty_form(self):
+        self.assertEqual(slots.canonical_category(""), "")
+        self.assertEqual(slots.canonical_category(None), "")
+
+
 if __name__ == "__main__":
     unittest.main()
