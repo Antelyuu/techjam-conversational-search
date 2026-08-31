@@ -6,12 +6,14 @@ The agent receives an anonymised customer profile and a short opening message, t
 up to ten turns to surface a hidden target product from a frozen catalogue of 50,000
 Amazon clothing items, asking one clarifying question per turn as it goes.
 
-It is deterministic, runs on the Python standard library, works offline, and uses no
-model and no API.
+It is deterministic, works offline, and uses no API and no tokens. Its ranking path is
+standard library only except for one optional local embedding model, which exists to keep
+the agent working when a customer paraphrases instead of quoting; it is inert on this
+benchmark and the agent runs without it.
 
 | metric | starter BM25 | this agent |
 |---|---|---|
-| **TechnicalScore** | 0.106710 | **0.945497** |
+| **TechnicalScore** | 0.106710 | **0.945297** |
 | Hit Rate@10 | 0.125 | **1.000** |
 | MRR | 0.068034 | **0.938657** |
 | MTTC (mean turns to convert) | 9.81 | **2.805** |
@@ -20,12 +22,17 @@ Hit Rate@10 is 1.000 on each of the four scenario types separately: Buying, Brow
 Intent Override and Boundary.
 
 ```bash
-python3 -m evaluator.local_evaluator     # no dependencies, no network, no env vars
+python3 -m evaluator.local_evaluator     # no network, no env vars
 ```
 
-> Python 3.10+. Nothing to `pip install`. The one prerequisite is the 60 MB catalogue,
-> which is not stored in git — **[docs/SETUP.md](docs/SETUP.md)** has the four commands
-> that fetch and verify it, plus every ablation, flag and test command.
+> Python 3.10+. The one prerequisite is the 60 MB catalogue, which is not stored in git —
+> **[docs/SETUP.md](docs/SETUP.md)** has the four commands that fetch and verify it, plus
+> every ablation, flag and test command.
+>
+> `pip install -r requirements.txt` is optional. It enables the semantic evidence feature,
+> which changes nothing on this benchmark and is worth +0.15 when the customer paraphrases
+> (E11). Without it the agent scores the same 0.945297 and stays standard library only, and
+> `SHOPPING_AGENT_SEMANTIC=0` turns it off explicitly.
 
 ---
 
@@ -231,7 +238,7 @@ first-hit turn, a miss assigned turn 11.
 ```text
 TechnicalScore = 0.50 × HitRate@10 + 0.30 × MRR + 0.20 × Efficiency
 Efficiency     = clip((11 - MTTC) / 10, 0, 1)
-               = 0.50 × 1.000 + 0.30 × 0.938657 + 0.20 × 0.8195  =  0.945497
+               = 0.50 × 1.000 + 0.30 × 0.938657 + 0.20 × 0.8185  =  0.945297
 ```
 
 ### How we got here
@@ -260,9 +267,16 @@ xychart-beta
 | P6 + exact stated category (E8) | 0.929426 | 0.990 | 0.912421 | 2.965 |
 | P6 + pool depth re-priced to 400 (E8) | 0.933701 | 0.995 | 0.910671 | 2.850 |
 | P6 + disclosure-gated shortlist widening (E9) | 0.942229 | 0.995 | 0.942764 | 2.905 |
-| **P6 + category-filtered retrieval (E9)** | **0.945497** | **1.000** | **0.938657** | **2.805** |
+| P6 + category-filtered retrieval (E9) | 0.945497 | 1.000 | 0.938657 | 2.805 |
+| **P7 + semantic evidence (E11)** | **0.945297** | **1.000** | **0.938657** | **2.815** |
 
-Two rows go backwards on a component metric and forwards on the composite. The shortlist
+The last row goes backwards, by 0.0002, and is the only row in this table that does. It
+buys nothing here and is not meant to: it retires a feature that was measured to be
+actively harmful once the customer stops quoting, and replaces it with one worth +0.1517
+on a paraphrased replay of this same set. The public column is what it costs; E11 is where
+the other column lives.
+
+Two further rows go backwards on a component metric and forwards on the composite. The shortlist
 policy costs HitRate 0.975 → 0.970 and buys MRR 0.698 → 0.833; the category filter costs
 MRR 0.943 → 0.939 and buys the last hit. Both are the expected shape rather than a
 surprise, and both are explained where they happen.
@@ -321,26 +335,36 @@ Nothing that can go wrong is allowed to cost a session, and no degradation is si
 - every degradation prints its reason once to stderr, so a degraded run is visible rather
   than just quietly scoring lower.
 
-169 unit tests cover this, standard library only, in about 5 seconds.
+196 unit tests cover this, standard library only, in about 3 seconds — including the
+semantic feature's own degradation paths, which run against a synthetic artifact so the
+suite never loads a model.
 
 ---
 
 ## Cost, latency and resource use
 
-**Model / API: none.** Measured over the full 200-session public set (561 agent turns) on
-Apple Silicon, Python 3.13.6.
+**No API, no network, no tokens, $0.** Measured over the full 200-session public set
+(561 agent turns) on Apple Silicon, Python 3.13.6, with and without the optional semantic
+evidence feature — both score exactly 0.945297, so this table is the price of the
+robustness it buys elsewhere, not of the number above.
 
-| | |
-|---|---|
-| model / API | none |
-| network required | no |
-| prompt + completion tokens | 0 |
-| estimated cost per session | $0.00 |
-| cold start (indexing 50,000 products) | 4.2 s, once per process |
-| per-turn latency | 37 ms median, 80 ms p95, 242 ms max |
-| full 200-session evaluation | 28 s |
-| peak RSS (whole process, agent plus evaluator) | 0.76 GB |
-| dependencies on the scored path | none, standard library only |
+| | default (semantic on) | `SHOPPING_AGENT_SEMANTIC=0` |
+|---|---|---|
+| model | voyage-4-nano, Apache-2.0, run locally | none |
+| API / network required | no | no |
+| prompt + completion tokens | 0 | 0 |
+| estimated cost per session | $0.00 | $0.00 |
+| cold start (indexing 50,000 products) | 4.3 s | 4.1 s |
+| per-turn latency | 52 ms median, 121 ms p95 | 35 ms median, 75 ms p95 |
+| full 200-session evaluation | 35 s | 22 s |
+| peak RSS (agent plus evaluator) | 1.60 GB | 0.78 GB |
+| dependencies on the scored path | numpy, torch, sentence-transformers | none, standard library only |
+| bundled artifact | 66 MB (int8, 256 dimensions) | none |
+
+One caveat worth stating rather than burying: the embedding model loads lazily on the
+first turn that has a disclosure to score, which makes that one turn about 3.2 s. If the
+organiser enforces a per-turn timeout or a memory cap below ~2 GB, set
+`SHOPPING_AGENT_SEMANTIC=0` — the benchmark score is unchanged by it.
 
 Being deterministic and offline means the agent holds up under the organiser's stated
 right to score submissions with network access disabled, and under CPU, memory and

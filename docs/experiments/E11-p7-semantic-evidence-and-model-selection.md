@@ -16,9 +16,10 @@ overall_metrics:
   paraphrased_after_minilm: {hit_rate_at_10: 0.905, technical_score: 0.799906}
   paraphrased_after_bge:    {hit_rate_at_10: 0.925, technical_score: 0.825260}
   paraphrased_after_voyage: {hit_rate_at_10: 0.975, technical_score: 0.862054}
+  shipped: {public: 0.945297, public_hit_rate: 1.000, paraphrased_l2: 0.847762, paraphrased_hit_rate: 0.975}
 model_api: {model: "voyageai/voyage-4-nano (Apache-2.0 open weights, run locally)", network_required: false, prompt_tokens: 0, completion_tokens: 0, api_cost_usd: 0}
-known_regressions: []
-decision: "voyage-4-nano at 256 dimensions, int8, is the recommended model. NOTHING SHIPPED -- the change edits the reranking table and is held for review."
+known_regressions: ["public composite 0.945497 -> 0.945297, from retiring constraint_evidence; HitRate 1.000 held"]
+decision: "SHIPPED on phase/8-semantic-evidence: voyage-4-nano at 256 dimensions int8 (66 MB), weight 192, gated on slot ownership having gone dark, replacing constraint_evidence."
 ```
 
 ## Why the obvious comparison was not the comparison
@@ -290,6 +291,67 @@ The two overlap and the semantic feature dominates, so the recommendation
 Phase 7 left open should be closed as **not taken** -- the same shape as E6's
 `constraint_evidence` being subsumed by slot ownership one phase later.
 
+## The gate, which was not in the plan and is the main finding
+
+Everything above is the ungated feature, and shipping it that way would have
+cost the headline HitRate. Measured end to end at the shippable 256-dimension
+artifact, the ungated feature scores **0.941680 / HitRate 0.995** on the public
+set -- it loses a hit.
+
+The cause is a mismatch of authority rather than a bug. At weight 192 the
+feature outweighs `slot_evidence` (16) by an order of magnitude. That is right
+when the customer has paraphrased and ownership has gone dark, and wrong when
+they have not: on the verbatim set the exact features have already identified
+the target, and a high semantic score for a near-neighbour can outvote them.
+The weight was swept on paraphrased replays, where the features it overrules
+are silent anyway, so nothing in that sweep could have surfaced this.
+
+The fix is the option E10 listed and did not take: `shortlist.py` already
+computes "the customer disclosed something and no candidate owns any of it",
+and the same signal can price the feature instead of merely widening a list.
+Two forms were measured. **Hard**: fire only when no disclosure is owned.
+**Soft**: scale the score by the share of disclosures nobody owns, so the
+feature speaks exactly as loudly as slot ownership is silent.
+
+| voyage-4-nano @256 int8 | public | HitRate | paraphrased L2 | HitRate |
+|---|---|---|---|---|
+| ungated | 0.941680 | 0.995 | 0.839235 | 0.965 |
+| hard gate | 0.945297 | 1.000 | 0.836785 | 0.965 |
+| **soft gate (shipped)** | **0.945297** | **1.000** | **0.847762** | **0.975** |
+
+The soft gate is better on **both** sides at once, which is worth stating
+plainly because it is rare: it recovers the public HitRate the ungated form
+loses *and* beats it by 0.0085 under paraphrase. The hard gate is worse than
+either, and for a legible reason -- a partly reworded turn still has some
+disclosures owned, so an all-or-nothing switch silences the feature exactly
+when it is half needed.
+
+It also changes the character of the change. Ungated, this was a 0.00087
+premium paid for insurance. Gated, the public set is untouched *by
+construction* rather than by luck, and the only remaining cost is the 0.0002
+of retiring `constraint_evidence`.
+
+## What shipped, measured end to end
+
+The numbers above come from the probe. These come from the agent, on the
+branch, with the 66 MB artifact it ships:
+
+| | before (E10) | after (E11) |
+|---|---|---|
+| `local_evaluator` (the submission) | 0.945497 / 1.000 | **0.945297 / 1.000** |
+| paraphrase L0 control | 0.945497 | 0.945297 |
+| paraphrase L2 | 0.696015 / 0.805 | **0.847762 / 0.975** |
+| L2 `--paraphrase-category` | 0.627500 | **0.798361 / 0.910** |
+| L2 held-out lexicon | 0.858798 / 0.980 | **0.903642 / 0.990** |
+| L3 (information loss) | 0.673673 | **0.790816 / 0.905** |
+| unit tests | 178 | 196 |
+
+Keeping `constraint_evidence` at 12.0 alongside the gated feature was measured
+too, and reproduces **0.945497 exactly** on the public set for 0.836153 at L2 --
+0.0002 of public score against 0.0116 of paraphrase robustness. The replace
+shape was taken; the additive one is one constant away for anyone who wants
+the headline number back.
+
 ## Recommendation, and what is deliberately not decided
 
 **Model: `voyage-4-nano`, truncated to 256 dimensions and stored int8.** It
@@ -298,22 +360,29 @@ whose artifact fits the repository at all, and the truncation and quantization
 that make it fit cost 0.023 and 0.000006 respectively. Its price is about
 0.00087 of public score and about 20 ms per turn.
 
-**Shape: undecided, and it is a real choice.** Replace gives up 0.0002-0.0009
-of public score for 0.008-0.014 more paraphrase robustness; additive gives up
-none at all for MiniLM and BGE. For Voyage the distinction mostly disappears,
-because its 0.00087 is paid either way.
+**Shape: replace, gated.** `constraint_evidence` retires to 0.0 and the
+semantic feature takes its place at 192, scaled by the share of disclosures
+nobody owns.
 
-Nothing is shipped from this record. The change edits the reranking table,
-which this project does not do without review, and it adds a runtime embedding
-dependency to a submission whose default path is currently stdlib-only,
-offline and zero-token. That last point is not a scoring question and the
-composite cannot see it, so it is not this record's to settle.
+**The dependency is the part the composite cannot see, and it is real.** The
+default path stops being standard-library-only: numpy, torch and
+sentence-transformers, a 66 MB bundled artifact, peak RSS 0.78 GB -> 1.60 GB,
+median turn 35 ms -> 52 ms, and one 3.2 s turn where the model loads lazily.
+Against that, it stays offline, uses no API key, spends 0 tokens and costs
+$0 -- which are the four things the Model and API Policy actually asks to be
+disclosed -- and the spec names "hybrid retrieval and semantic reranking" as
+an innovation direction.
 
-The break-even framing the project uses elsewhere applies and is stark: at
-0.00087 public cost against +0.166 paraphrased, the change pays for itself if
-the private set paraphrases with probability above roughly **0.5%**. Against
-E10's 41% for the dense flip, that is a different kind of bet -- but it is a
-bet on score alone, and it deliberately excludes the dependency cost.
+It is switchable in one step (`SHOPPING_AGENT_SEMANTIC=0`) and optional by
+construction: with no artifact or no sentence-transformers the feature scores
+0.0 for every candidate and the agent ranks exactly as it does with the flag
+off. **The public score is identical either way**, so anyone facing a memory
+cap below ~2 GB or a per-turn timeout should turn it off and lose nothing
+measurable on this benchmark.
+
+That is also the honest framing of the whole change: it buys nothing visible.
+It buys +0.1517 on a replay of this set by a customer who paraphrases, and the
+specification reserves the organiser's right to be that customer.
 
 ## What is left
 
