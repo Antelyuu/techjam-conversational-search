@@ -48,6 +48,9 @@ tests/test_organizer_pipeline.py
 CLAUDE.md
 PROGRESS.md
 handoffs/
+# Written for the team to read offline; superseded every phase, so it is kept
+# out of the submission rather than left to rot in it.
+handoff.md
 route_weight_sweep.json
 tmpwork/
 replay_trace.json
