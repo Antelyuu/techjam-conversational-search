@@ -49,6 +49,11 @@ class SessionState:
     # The coarse category the opening line named, verbatim. Set once, on
     # turn 1; the customer never restates it and never contradicts it.
     stated_category: str | None = None
+    # How many times in a row the open "other" question has been asked. The
+    # wildcard is exempt from the no-repeat rule under paraphrase (E14), and
+    # this is what bounds that exemption: `asked_attributes` is a set and
+    # cannot say whether two asks were consecutive.
+    consecutive_wildcard: int = 0
 
 
 @dataclass(frozen=True)

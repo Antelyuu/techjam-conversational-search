@@ -500,6 +500,16 @@ class Agent:
                     use_disagreement=self.use_disagreement,
                     block_soft_slots=self.block_soft_slots,
                     allow_repeats=self.allow_repeats,
+                    # The paraphrase regime, by the same predicate the
+                    # shortlist policy uses: the customer has stated
+                    # constraints and no pooled candidate owns any of them.
+                    # Counted at 0/563 verbatim turns, so the exemption it
+                    # unlocks cannot touch the public path.
+                    paraphrasing=(
+                        measured
+                        and len(request.state.disclosed_text) > 0
+                        and live_disclosures <= 0
+                    ),
                 )
             except Exception as error:
                 self._warn_once(f"clarification policy failed, asking nothing: {error}")

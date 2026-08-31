@@ -198,3 +198,7 @@ class ConversationOrchestrator:
         state.pending_attribute = attribute
         state.asked_attributes.add(attribute)
         state.clarification_turns += 1
+        if attribute == clarification.WILDCARD_ATTRIBUTE:
+            state.consecutive_wildcard += 1
+        else:
+            state.consecutive_wildcard = 0

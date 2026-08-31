@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from evaluator.local_evaluator import ALLOWED_ATTRIBUTES, TOP_K, normalize_recommendations
+from shopping_agent import clarification
 from starter.agent import Agent
 
 CATALOG_ROWS = [
@@ -109,11 +110,34 @@ class FallbackTest(unittest.TestCase):
             + ["Those options are not quite right yet."] * 5,
         )
 
+    def assert_no_question_loop(self, asked):
+        """The no-repeat guarantee, as it stands after E14.
+
+        A *specific* attribute still never repeats: asking "color" twice can
+        only return the same nothing, because the customer's answer to it does
+        not change. The open question is exempt, because it matches whatever
+        is still undisclosed and so its yield does not decay -- but only up to
+        `WILDCARD_REPEAT_CAP` times in a row, so a session cannot degenerate
+        into asking "what else matters?" over and over.
+        """
+        specific = [a for a in asked if a != clarification.WILDCARD_ATTRIBUTE]
+        self.assertEqual(
+            len(specific), len(set(specific)), f"repeated a specific question: {asked}"
+        )
+        run = 0
+        for attribute in asked:
+            run = run + 1 if attribute == clarification.WILDCARD_ATTRIBUTE else 0
+            self.assertLessEqual(
+                run,
+                clarification.WILDCARD_REPEAT_CAP,
+                f"asked the open question {run} times running: {asked}",
+            )
+
     def test_questions_stop_rather_than_repeat(self):
         agent = self.agent(enable_reranker=True)
         responses = self.converse(agent, ["I'm looking for shoes"] * 10)
         asked = [r["ask_attribute"] for r in responses if r["ask_attribute"] is not None]
-        self.assertEqual(len(asked), len(set(asked)), f"repeated a question: {asked}")
+        self.assert_no_question_loop(asked)
 
     def test_an_override_word_inside_a_disclosure_does_not_reopen_a_question(self):
         """Disclosures are raw product copy, so "instead" or "no longer" turn
@@ -129,7 +153,7 @@ class FallbackTest(unittest.TestCase):
             ],
         )
         asked = [r["ask_attribute"] for r in responses if r["ask_attribute"] is not None]
-        self.assertEqual(len(asked), len(set(asked)), f"repeated a question: {asked}")
+        self.assert_no_question_loop(asked)
 
     def test_a_real_override_reopens_the_displaced_question(self):
         """The override message arrives instead of the answer, so the question

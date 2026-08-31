@@ -13,6 +13,8 @@ answer.
 
 from __future__ import annotations
 
+import os
+
 import re
 from collections import Counter
 
@@ -82,6 +84,24 @@ DEAD_ATTRIBUTES = frozenset({"brand", "category", "budget"})
 # looked worth +0.111, but two thirds of that was really the cost of running
 # out of questions early, which unblocking soft-guessed slots fixed properly.
 WILDCARD_ATTRIBUTE = "other"
+
+# Force the wildcard exemption on even when the customer is quoting. This is
+# the measurement arm, not the shipped path: ungated it costs 0.002264 of
+# public score. The shipped trigger is the `paraphrasing` argument, which is
+# the same predicate the shortlist policy uses and which fires 0/563 verbatim
+# turns.
+#
+# Whether the wildcard is exempt from the no-repeat rule. MEASURED (E14) at
+# paraphrase level 2: 34.4% of question turns yield nothing, and the waste is
+# concentrated exactly where the prior is lowest -- color 94.7% wasted, style,
+# size and use_case 100%, against the wildcard's 4.9%. The agent reaches them
+# only because it has already spent the questions worth asking.
+REPEAT_WILDCARD = os.environ.get("SHOPPING_AGENT_REPEAT_WILDCARD", "0") == "1"
+
+# Most consecutive open questions the exemption allows. Uncapped, a paraphrasing
+# session asks "other" for all eight of its clarification turns, which is a poor
+# transcript regardless of what it scores. Swept in E14.
+WILDCARD_REPEAT_CAP = int(os.environ.get("SHOPPING_AGENT_WILDCARD_CAP", "3"))
 
 # There are only six real attributes and roughly nine usable turns, so the
 # attribute list binds first. This is the explicit budget the spec asks be
@@ -178,6 +198,7 @@ def choose_attribute(
     use_disagreement: bool = True,
     block_soft_slots: bool = True,
     allow_repeats: bool = False,
+    paraphrasing: bool = False,
 ) -> str | None:
     """The one attribute to ask about this turn, or None to stop asking.
 
@@ -204,7 +225,22 @@ def choose_attribute(
     }
     unavailable = set(state.rejected_attributes) | fixed | DEAD_ATTRIBUTES
     if not allow_repeats:
-        unavailable |= set(state.asked_attributes)
+        asked = set(state.asked_attributes)
+        exempt = paraphrasing or REPEAT_WILDCARD
+        if exempt and state.consecutive_wildcard >= WILDCARD_REPEAT_CAP:
+            # Bounded so the agent cannot ask the same open question for the
+            # whole session. Dialogue quality is a judged criterion and
+            # "what else matters?" eight times running is a bad transcript
+            # whatever it scores.
+            exempt = False
+        if exempt:
+            # The no-repeat rule exists because a specific attribute goes
+            # stale: ask "color" twice and the second ask can only return the
+            # same nothing. The wildcard is not like that. It matches *any*
+            # undisclosed constraint, so its yield does not decay with
+            # repetition -- it always targets whatever is left on the card.
+            asked -= {WILDCARD_ATTRIBUTE}
+        unavailable |= asked
     if not allow_wildcard:
         # The open question now competes in the table rather than sitting
         # behind it, so the ablation flag has to exclude it here to still mean
