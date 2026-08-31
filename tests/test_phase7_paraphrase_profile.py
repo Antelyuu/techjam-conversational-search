@@ -106,6 +106,36 @@ class OwnershipOverlapTest(unittest.TestCase):
         owned = frozenset({"material 100 cotton"})
         self.assertEqual(slots.ownership_overlap("rubber sole", owned), 0.0)
 
+    def test_a_compressive_paraphrase_does_not_favour_the_shorter_owner(self):
+        """The defect the first version of this feature shipped with.
+
+        Jaccard divides by the union, so it charged the true owner for the
+        length of its own card value. A customer who says *less* than the card
+        holds therefore scored the true owner 0.333 and a shorter near-
+        duplicate 0.667 -- backwards, at the weight of the table's dominant
+        feature, and strictly worse than the silence it replaced. It survived
+        the first round of measurement because the L2 harness is expansive and
+        never produces a disclosure shorter than its source.
+
+        The requirement is not that the true owner wins. Both products
+        genuinely account for what was said, so the honest outcome is a tie
+        that leaves the ordering to other features. The requirement is that
+        the impostor must not win."""
+        target = frozenset({"machine wash cold with like colors"})
+        shorter = frozenset({"hand wash cold"})
+        said = "wash cold"
+        self.assertGreaterEqual(
+            slots.ownership_overlap(said, target),
+            slots.ownership_overlap(said, shorter),
+        )
+        self.assertGreaterEqual(
+            slots.ownership_overlap(said, target), RELAXED_OWNERSHIP_THRESHOLD
+        )
+
+    def test_one_shared_word_is_coincidence_not_ownership(self):
+        owned = frozenset({"machine wash cold with like colors"})
+        self.assertEqual(slots.ownership_overlap("cold brew tumbler", owned), 0.0)
+
     def test_a_short_value_inside_a_long_one_is_not_full_ownership(self):
         """The impostor path E7/E8 closed, which a containment measure would
         reopen at the weight of the table's dominant feature."""

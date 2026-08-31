@@ -311,9 +311,19 @@ def normalize_disclosure(text: str) -> str:
 # ever loads. Keyed on the value string rather than on any product id, so two
 # catalogues in one process -- which is what the tests are -- cannot serve
 # each other's tokens.
+#
+# The limit is NOT borrowed from _TOKEN_CACHE, and the difference matters.
+# That cache holds one entry per *product* (50,000 against 120,000, so it
+# never trips). This one holds one entry per distinct *card value*, and this
+# catalogue has **268,564** of them -- counted, not estimated. At 200,000
+# this cache would fill and clear wholesale part-way through a run, then
+# refill, which is thrashing rather than bounding.
+#
+# Only reached once a rewording has been detected, so on the public path it
+# stays empty and costs nothing at all.
 _VALUE_TOKEN_RE = re.compile(r"[a-z0-9]+")
 _VALUE_TOKEN_CACHE: dict[str, frozenset[str]] = {}
-_VALUE_TOKEN_CACHE_LIMIT = 200_000
+_VALUE_TOKEN_CACHE_LIMIT = 400_000
 
 
 def value_tokens(value: str) -> frozenset[str]:
@@ -327,43 +337,86 @@ def value_tokens(value: str) -> frozenset[str]:
     return cached
 
 
+# A disclosure and an owned value must share at least this many tokens before
+# the overlap is treated as evidence rather than coincidence. Single-token
+# disclosures can only ever share one, so the floor is min(2, len(wanted)).
+MIN_SHARED_TOKENS = 2
+
+# How much longer an owned value may be than the disclosure before containment
+# stops meaning anything. "cotton" is contained in "100% cotton blend twill
+# lining" at a ratio of 5, and crediting that in full is the E7/E8 impostor.
+MAX_LENGTH_RATIO = 3.0
+
+
 def ownership_overlap(value: str, owned: frozenset[str]) -> float:
-    """How nearly this candidate owns `value`, as a 0-1 score.
+    """How completely this candidate accounts for `value`, as a 0-1 score.
 
     Exact ownership asks whether the candidate holds this string as a whole
     field value of its own. That is the sharp question the public simulator
     rewards, and it is worth +0.0316 there (E8) precisely because it is
     all-or-nothing. It is also why the feature goes silent the moment the
-    customer rewords: change one word of a nine-word value and identity scores
-    the same zero as a completely unrelated product.
+    customer rewords: change one word of a nine-word value and identity
+    scores the same zero as a completely unrelated product.
 
     This is the graded version, for use only once a rewording has been
-    detected. It is the best Jaccard similarity between the disclosed value's
-    tokens and any single owned value's tokens.
+    detected. It is **containment** -- the share of the disclosure's own
+    tokens that some single owned value carries -- subject to two guards.
 
-    **Jaccard rather than containment, deliberately.** Containment -- the
-    share of the disclosure's own tokens the owned value carries -- scores a
-    short disclosure fully contained in a long value at 1.0, so "cotton" would
-    perfectly "own" a candidate whose value reads "100% cotton blend twill
-    lining". That is exactly the impostor this project spent E7 and E8 killing
-    off, and it would be reintroduced here at the weight of the table's
-    dominant feature. Jaccard charges for the extra tokens as well as the
-    missing ones, scoring that pair 0.25 instead of 1.0.
+    **Containment rather than Jaccard, and this was measured the wrong way
+    round first.** Jaccard divides by the union, so it charges for the owned
+    value's extra tokens as well as the disclosure's missing ones. That reads
+    as even-handed and is not: under a *compressive* paraphrase, where the
+    customer says less than the card holds, it penalises the true owner for
+    the length of its own value and rewards whichever product owns the
+    shortest phrase made of those words. Measured, before the fix:
 
-    Compared against every owned value and not merely the best-aligned one,
-    because the customer chooses which of the card's values to quote and the
-    agent does not know which.
+        customer says   "wash cold"
+        true owner owns "machine wash cold with like colors"  Jaccard 0.333
+        impostor   owns "hand wash cold"                      Jaccard 0.667
+
+    At a threshold of 0.5 that scored the true owner 0.0 and the impostor
+    1.0 -- at the weight of the table's dominant feature, this was strictly
+    worse than the silence it replaced. Containment scores both 1.0: it
+    declines to separate them, and other features decide. Failing to
+    discriminate is a far cheaper error than discriminating backwards.
+
+    The reason this survived the first round of measurement is worth
+    recording. `scripts/paraphrase_eval.py` level 2 is *expansive* --
+    "cotton" becomes "natural plant fibre" -- so disclosures come out no
+    shorter than the values they came from and the asymmetry never bites.
+    Level 3 is the compressive one. The threshold had been swept only at
+    level 2, which is the single regime in which the defect is invisible.
+
+    The two guards replace what Jaccard was there to provide:
+
+    * `MIN_SHARED_TOKENS` -- one word in common is coincidence, not
+      evidence.
+    * `MAX_LENGTH_RATIO` -- a disclosure buried in a value several times its
+      length is contained by accident, which is the E7/E8 impostor exactly.
+
+    Selectivity does the rest of the work: a value many pooled candidates
+    account for is re-priced down by `ownership_weights`, so a phrase that
+    matches half the pool cannot decide anything however well it is
+    contained.
+
+    Compared against every owned value rather than only the best-aligned
+    one, because the customer chooses which of the card's values to quote and
+    the agent does not know which.
     """
     wanted = value_tokens(value)
     if not wanted:
         return 0.0
+    need = min(MIN_SHARED_TOKENS, len(wanted))
+    limit = MAX_LENGTH_RATIO * len(wanted)
     best = 0.0
     for candidate_value in owned:
         have = value_tokens(candidate_value)
-        shared = len(wanted & have)
-        if not shared:
+        if len(have) > limit:
             continue
-        score = shared / len(wanted | have)
+        shared = len(wanted & have)
+        if shared < need:
+            continue
+        score = shared / len(wanted)
         if score > best:
             best = score
             if best == 1.0:
