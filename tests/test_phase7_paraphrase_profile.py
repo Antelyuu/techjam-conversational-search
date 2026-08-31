@@ -185,6 +185,20 @@ class OwnershipOverlapTest(unittest.TestCase):
             slots.ownership_overlap(said, target), RELAXED_OWNERSHIP_THRESHOLD
         )
 
+    def test_a_brief_quote_of_a_long_value_is_still_ownership(self):
+        """The second defect this feature shipped with.
+
+        A length cap -- refusing any owned value more than 3x the
+        disclosure's length -- was tried as the E7/E8 guard. It reads like
+        the right protection and refuses the true owner's own words: a
+        customer who quotes three words out of a ten-word care label is
+        summarising, not impersonating. Every string below is a contiguous
+        fragment of the owned value and must be credited in full."""
+        owned = frozenset({"Machine wash cold with like colors and tumble dry low"})
+        for said in ("wash cold", "machine wash cold", "tumble dry low"):
+            with self.subTest(said=said):
+                self.assertEqual(slots.ownership_overlap(said, owned), 1.0)
+
     def test_one_shared_word_is_coincidence_not_ownership(self):
         owned = frozenset({"machine wash cold with like colors"})
         self.assertEqual(slots.ownership_overlap("cold brew tumbler", owned), 0.0)

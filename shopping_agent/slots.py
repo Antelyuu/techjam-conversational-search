@@ -338,14 +338,30 @@ def value_tokens(value: str) -> frozenset[str]:
 
 
 # A disclosure and an owned value must share at least this many tokens before
-# the overlap is treated as evidence rather than coincidence. Single-token
-# disclosures can only ever share one, so the floor is min(2, len(wanted)).
+# the overlap is treated as evidence rather than coincidence.
+#
+# This is an ABSOLUTE floor, not min(2, len(wanted)), and that is the whole
+# of the E7/E8 protection. A bare one-word disclosure -- "cotton" against a
+# value reading "100% cotton blend twill lining" -- shares exactly one token
+# and is refused outright, which is the impostor case. It costs nothing real:
+# slots.card_values extracts bare material and colour labels as owned values
+# in their own right, so a single-word disclosure is almost always matched
+# *exactly* by some pooled candidate, and the regime never fires on it.
+#
+# A length cap was tried here first and removed. Requiring the owned value to
+# be at most 3x the disclosure's length looks like the same protection and is
+# not: it refuses honest fragments of a long value. Measured, against
+# "Machine wash cold with like colors and tumble dry low" (10 tokens):
+#
+#   "machine wash cold"           3 shared of 3 wanted, ratio 3.3  -> REFUSED
+#   "tumble dry low"              3 shared of 3 wanted, ratio 3.3  -> REFUSED
+#   "wash cold with like colors"  5 shared of 5 wanted, ratio 2.0  -> 1.0
+#
+# The first two are the true owner's own words and were being scored 0.0 for
+# the crime of quoting a long value briefly -- which is exactly what a
+# customer summarising rather than expanding does. The token floor refuses
+# the impostor without refusing them.
 MIN_SHARED_TOKENS = 2
-
-# How much longer an owned value may be than the disclosure before containment
-# stops meaning anything. "cotton" is contained in "100% cotton blend twill
-# lining" at a ratio of 5, and crediting that in full is the E7/E8 impostor.
-MAX_LENGTH_RATIO = 3.0
 
 
 def ownership_overlap(value: str, owned: frozenset[str]) -> float:
@@ -387,12 +403,10 @@ def ownership_overlap(value: str, owned: frozenset[str]) -> float:
     Level 3 is the compressive one. The threshold had been swept only at
     level 2, which is the single regime in which the defect is invisible.
 
-    The two guards replace what Jaccard was there to provide:
-
-    * `MIN_SHARED_TOKENS` -- one word in common is coincidence, not
-      evidence.
-    * `MAX_LENGTH_RATIO` -- a disclosure buried in a value several times its
-      length is contained by accident, which is the E7/E8 impostor exactly.
+    `MIN_SHARED_TOKENS` replaces what Jaccard was there to provide: one word
+    in common is coincidence rather than evidence, and refusing single-token
+    matches outright is what keeps "cotton" from owning "100% cotton blend
+    twill lining".
 
     Selectivity does the rest of the work: a value many pooled candidates
     account for is re-priced down by `ownership_weights`, so a phrase that
@@ -406,15 +420,13 @@ def ownership_overlap(value: str, owned: frozenset[str]) -> float:
     wanted = value_tokens(value)
     if not wanted:
         return 0.0
-    need = min(MIN_SHARED_TOKENS, len(wanted))
-    limit = MAX_LENGTH_RATIO * len(wanted)
+    if len(wanted) < MIN_SHARED_TOKENS:
+        return 0.0
     best = 0.0
     for candidate_value in owned:
         have = value_tokens(candidate_value)
-        if len(have) > limit:
-            continue
         shared = len(wanted & have)
-        if shared < need:
+        if shared < MIN_SHARED_TOKENS:
             continue
         score = shared / len(wanted)
         if score > best:
