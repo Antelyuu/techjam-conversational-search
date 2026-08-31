@@ -516,14 +516,18 @@ def prepare_evidence(
     # Re-price selectivity against the graded match, because the exact weights
     # are all zero here by construction and would leave the feature inert.
     relaxed = False
-    if RELAXED_OWNERSHIP and not live:
-        overlaps = [
-            [slots.ownership_overlap(value, owned) for owned in pool]
-            for value in normalized
-        ]
+    # `normalized` is stated explicitly rather than relied on: the early
+    # return above already guarantees it here, but this condition is the
+    # regime predicate and must not silently become "nothing was said yet" if
+    # that return is ever restructured.
+    if RELAXED_OWNERSHIP and normalized and not live:
         relaxed_counts = [
-            sum(1 for score in row if score >= RELAXED_OWNERSHIP_THRESHOLD)
-            for row in overlaps
+            sum(
+                1 for owned in pool
+                if slots.ownership_overlap(value, owned)
+                >= RELAXED_OWNERSHIP_THRESHOLD
+            )
+            for value in normalized
         ]
         if any(relaxed_counts):
             weights = slots.ownership_weights(relaxed_counts, len(pool))
