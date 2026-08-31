@@ -63,19 +63,31 @@ def main() -> None:
         "--feature", default="lexical_rank",
         help="which PARAPHRASE_WEIGHTS entry to sweep",
     )
-    parser.add_argument("--values", type=float, nargs="+", required=True)
+    parser.add_argument("--values", type=float, nargs="*", default=[])
     parser.add_argument(
         "--threshold", type=float, nargs="*", default=None,
         help="instead sweep reranking.RELAXED_OWNERSHIP_THRESHOLD",
     )
     args = parser.parse_args()
 
+    # A misspelled --feature would otherwise be applied, silently dropped by
+    # score_candidate (which iterates FEATURE_WEIGHTS), and print a flat curve
+    # at the baseline score that reads exactly like a real measurement.
+    if args.threshold is None and args.feature not in reranking.FEATURE_WEIGHTS:
+        parser.error(
+            f"unknown feature {args.feature!r}; "
+            f"choose one of {sorted(reranking.FEATURE_WEIGHTS)}"
+        )
+    sweep_values = args.threshold if args.threshold is not None else args.values
+    if not sweep_values:
+        parser.error("nothing to sweep: pass --values, or --threshold with values")
+
     samples = ev.load_jsonl(args.dataset)
     catalog_ids, categories, products = ev.catalog_index(args.catalog)
 
     baseline = dict(reranking.PARAPHRASE_WEIGHTS)
-    sweep = args.threshold if args.threshold is not None else args.values
-    for value in sweep:
+    original_threshold = reranking.RELAXED_OWNERSHIP_THRESHOLD
+    for value in sweep_values:
         if args.threshold is not None:
             reranking.RELAXED_OWNERSHIP_THRESHOLD = value
         else:
@@ -87,6 +99,7 @@ def main() -> None:
             args.paraphrase_category, samples, catalog_ids, categories,
             products, args.catalog,
         )
+        reranking.RELAXED_OWNERSHIP_THRESHOLD = original_threshold
         print(json.dumps({
             "swept": "threshold" if args.threshold is not None else args.feature,
             "value": value,

@@ -81,13 +81,47 @@ disclosed value's tokens and any single owned value's tokens, and the
 selectivity weights are recomputed against that graded notion so the feature
 has something to score with.
 
-**Jaccard rather than containment, deliberately.** Containment — the share of
-the disclosure's own tokens that the owned value carries — scores a short
-disclosure fully contained in a long value at 1.0, so "cotton" would
-perfectly own a candidate reading "100% cotton blend twill lining". That is
-precisely the impostor E7 and E8 were spent killing, and containment would
-reintroduce it at the weight of the table's dominant feature. Jaccard charges
-for the extra tokens as well as the missing ones and scores that pair 0.25.
+**This shipped as Jaccard first, and that was wrong.** The reasoning was that
+containment — the share of the disclosure's own tokens some owned value
+carries — scores a short disclosure buried in a long value at 1.0, so
+"cotton" would perfectly own a candidate reading "100% cotton blend twill
+lining", reintroducing the E7/E8 impostor at the weight of the table's
+dominant feature. Jaccard divides by the union instead, charging for the
+extra tokens as well as the missing ones.
+
+That is even-handed in form and not in effect. Dividing by the union charges
+the **true owner** for the length of its own card value, so under a
+*compressive* paraphrase — a customer saying less than the card holds — it
+rewards whichever product owns the shortest phrase built from those words:
+
+    customer says   "wash cold"
+    true owner owns "machine wash cold with like colors"   Jaccard 0.333
+    impostor   owns "hand wash cold"                       Jaccard 0.667
+
+At a threshold of 0.5 that scored the true owner **0.0** and the impostor
+**0.667**, at weight 16.0. On that turn class the feature was not merely
+unhelpful, it was **strictly worse than the silence it replaced** — and since
+the regime firing also drives `shortlist.py` to return all ten, a misfire can
+push the target out of the ten and lose the hit outright rather than only the
+rank.
+
+Shipped instead is **containment with two guards**: at least two shared
+tokens, and a cap on how much longer the owned value may be than the
+disclosure. The true owner now scores 1.0, the impostor also scores 1.0, and
+the "cotton" case is refused outright at 0.0 rather than the 0.2 Jaccard gave
+it. A tie is the honest outcome — both products genuinely account for what
+was said, so the order should fall to other features. Failing to discriminate
+is a far cheaper error than discriminating backwards. Selectivity does the
+remaining work: `ownership_weights` re-prices down any value much of the pool
+accounts for.
+
+**Why the first round of measurement did not catch it, which is the more
+useful lesson.** `paraphrase_eval` level 2 is *expansive* — "cotton" becomes
+"natural plant fibre" — so a disclosure is never shorter than the value it
+came from and the length asymmetry cannot bite. Level 3 is the compressive
+one. The threshold had been swept **only at level 2**, which is precisely the
+regime in which this defect is invisible. A sweep is only as honest as the
+worst case in the fixture it is swept over.
 
 `live_disclosures` and `consistent` are kept **exact** rather than recomputed
 from the relaxed pass. Deriving them from the relaxed match would let a

@@ -269,9 +269,11 @@ FEATURE_WEIGHTS: dict[str, float] = {
 # Applying either conditionally makes the public cost exactly zero rather
 # than 0.00075, and that is not an estimate. The gate is the paraphrase
 # predicate E9 already counted over the whole public set: disclosures on
-# record that no pooled candidate owns fired on **0 of 2000 turns**
-# (shopping_agent/shortlist.py). A profile behind that gate cannot move a
-# score it is never applied to.
+# record that no pooled candidate owns fired on **0 of the 561 turns the
+# public run actually plays**, 461 of which had disclosures on record. (The
+# session stops at the first hit and MTTC is 2.805, so 2000 is the turn
+# budget rather than the sample; E9 reports the same zero against that
+# budget.) A profile behind that gate cannot move a score it never applies to.
 #
 # Only keys already present in FEATURE_WEIGHTS may appear here; see
 # weights_for().
@@ -319,9 +321,12 @@ def weights_for(paraphrase_regime: bool) -> dict[str, float]:
     return merged
 
 
-# Guards the invariant weights_for() relies on: an override naming a feature
-# the checklist does not carry would silently add a contribution in one regime
-# and not the other, and explain() would disagree between turns.
+# Guards against a typo'd override being silently ignored. score_candidate
+# iterates FEATURE_WEIGHTS, so an unknown key is *dropped* rather than
+# applied -- the score does not change, nothing raises, and a sweep over the
+# misspelled name prints a flat curve that reads like a measurement. That is
+# the failure this catches, and it is reachable. (Stripped under `python -O`,
+# which costs nothing at runtime beyond losing this guard.)
 assert set(PARAPHRASE_WEIGHTS) <= set(FEATURE_WEIGHTS), (
     "PARAPHRASE_WEIGHTS may only override features FEATURE_WEIGHTS defines"
 )
@@ -471,9 +476,11 @@ class DisclosureEvidence:
         any of them. On a quoting split that is close to impossible: the
         simulator builds its messages out of the target's own field values, so
         whenever the target is pooled it owns everything said. E9 counted this
-        predicate over the whole public set and it fired on **0 of 2000
-        turns**, which is what lets a weight profile behind it be inert by
-        construction rather than by tuning.
+        predicate over the public set with
+        scripts/paraphrase_regime_audit.py and it fires on **0 of the 561
+        turns actually played**, 461 of which had disclosures on record --
+        which is what lets a weight profile behind it be inert by
+        construction rather than by tuning. E9 reports the same zero.
 
         It is deliberately the same predicate shortlist.py already acts on, so
         the two policies cannot disagree about which regime a turn is in.
@@ -685,7 +692,10 @@ def rerank(
             slot_terms=prepared.slot_terms,
             stated_category=stated_category,
             weights=weights,
-            relaxed_ownership=prepared.relaxed,
+            # Gated on the same flag as the weight table: a parameter named
+            # after the feature must be able to turn the whole feature off,
+            # and the two halves must be ablatable together in one step.
+            relaxed_ownership=prepared.relaxed and paraphrase_profile,
         )
         for candidate in candidates
         if candidate.parent_asin in products

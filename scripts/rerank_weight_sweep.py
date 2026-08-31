@@ -92,6 +92,16 @@ def run_sweep(
         raise SystemExit("dense route unavailable; the dense_rank feature would be dead")
 
     original_weights = dict(reranking.FEATURE_WEIGHTS)
+    # Latent rather than active: this sweep runs on the public path, where the
+    # paraphrase regime never fires, so PARAPHRASE_WEIGHTS cannot currently
+    # override what is set here. Neutralised anyway, because "safe because of
+    # where it happens to be run" is one changed default away from silently
+    # measuring something else -- which is exactly what happened to
+    # scripts/paraphrase_weight_probe.py.
+    original_profile = dict(reranking.PARAPHRASE_WEIGHTS)
+    original_relaxed = reranking.RELAXED_OWNERSHIP
+    reranking.PARAPHRASE_WEIGHTS.clear()
+    reranking.RELAXED_OWNERSHIP = False
     original_decay = reranking.RANK_DECAY
     results: dict[str, dict] = {}
     try:
@@ -105,6 +115,9 @@ def run_sweep(
                 key: value for key, value in outcome.items() if key != "sessions"
             }
     finally:
+        reranking.PARAPHRASE_WEIGHTS.clear()
+        reranking.PARAPHRASE_WEIGHTS.update(original_profile)
+        reranking.RELAXED_OWNERSHIP = original_relaxed
         reranking.FEATURE_WEIGHTS.clear()
         reranking.FEATURE_WEIGHTS.update(original_weights)
         reranking.RANK_DECAY = original_decay

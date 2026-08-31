@@ -72,7 +72,21 @@ PROFILES: dict[str, dict[str, float]] = {
 
 def run(profile: str, level: int, seed: int, catalog: str, dataset: str) -> dict:
     original = dict(reranking.FEATURE_WEIGHTS)
+    # P7-T2 made this probe wrong without changing a line of it, which is the
+    # hazard worth recording. This script measures the UNCONDITIONAL table by
+    # patching FEATURE_WEIGHTS; `weights_for` then copies that table and
+    # applies PARAPHRASE_WEIGHTS on top, so on the ~83% of disclosing turns
+    # where the regime fires the profile silently overrode whatever was set
+    # here -- `lexical_rank_8` was measuring 8.0 on some turns and 4.0 on the
+    # rest, and the relaxed ownership pass ran underneath every profile.
+    # Neither failed; both quietly measured something else.
+    #
+    # Both are neutralised here so the probe means what its docstring says.
+    original_profile = dict(reranking.PARAPHRASE_WEIGHTS)
+    original_relaxed = reranking.RELAXED_OWNERSHIP
     try:
+        reranking.PARAPHRASE_WEIGHTS.clear()
+        reranking.RELAXED_OWNERSHIP = False
         reranking.FEATURE_WEIGHTS.update(PROFILES[profile])
         install_paraphrasing_customer(level, False, seed)
         samples = ev.load_jsonl(dataset)
@@ -91,6 +105,9 @@ def run(profile: str, level: int, seed: int, catalog: str, dataset: str) -> dict
     finally:
         reranking.FEATURE_WEIGHTS.clear()
         reranking.FEATURE_WEIGHTS.update(original)
+        reranking.PARAPHRASE_WEIGHTS.clear()
+        reranking.PARAPHRASE_WEIGHTS.update(original_profile)
+        reranking.RELAXED_OWNERSHIP = original_relaxed
 
 
 def main() -> None:
