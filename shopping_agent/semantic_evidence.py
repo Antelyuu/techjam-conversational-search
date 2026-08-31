@@ -40,16 +40,26 @@ recall stays 1.000, so what moved is ranking rather than retrieval -- which is
 what E10 said the whole remaining gap was.
 
 **Optional by construction, exactly like dense_retrieval.** If the artifact is
-missing, or numpy/sentence-transformers/torch are not installed, or the model
-cannot be loaded, `load_semantic_scorer()` returns None, the feature scores
-0.0 for every candidate alike, and the ordering falls through to the rest of
-the table -- which is the agent as it shipped before this module existed. The
-reason is written to stderr rather than swallowed, because a silently missing
-scorer looks exactly like a working agent that scores worse.
+missing, numpy or sentence-transformers is not installed, or the artifact does
+not belong to this catalogue, `load_semantic_scorer()` returns None, the
+feature scores 0.0 for every candidate alike, and the ordering falls through to
+the rest of the table -- which is the agent as it shipped before this module
+existed. The reason is written to stderr rather than swallowed, because a
+silently missing scorer looks exactly like a working agent that scores worse.
+
+The *weights* still load lazily, on the first turn with something to embed, so
+a run that never gets a disclosure never pays for them. Only the presence of
+the dependency is checked eagerly -- by `find_spec`, which does not import
+torch -- so that "no sentence-transformers" is reported at startup like every
+other unavailability rather than on turn 3. A model that is present but fails
+to load is latched on the first attempt and not retried, because retrying a
+slow failure once per turn is how a missing artifact turns into a timeout.
 """
 
 from __future__ import annotations
 
+import hashlib
+import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -65,8 +75,16 @@ from .embedding_config import (
     value_vectors_path,
 )
 
-# (disclosures, candidates, products) -> {parent_asin: 0-1 score}.
-SemanticScoreFn = Callable[[list[str], list[Candidate], dict], dict]
+# (candidates, products, weighted disclosures) -> {parent_asin: 0-1 score},
+# where the third argument is (disclosure text, content-token weight) pairs.
+SemanticScoreFn = Callable[
+    [list[Candidate], dict, list[tuple[str, float]]], dict[str, float]
+]
+
+
+# Same bounding rationale as evidence._TOKEN_CACHE: past the limit the cache is
+# dropped wholesale and rebuilt from the traffic that actually recurs.
+_CACHE_LIMIT = 120_000
 
 
 class SemanticEvidenceUnavailable(RuntimeError):
@@ -105,6 +123,16 @@ class SemanticScorer:
         except ImportError as error:  # pragma: no cover - environment guard
             raise SemanticEvidenceUnavailable(f"numpy is required: {error}") from error
 
+        # Checked here rather than at first use so a missing dependency is
+        # reported at startup, which is the whole point of the stderr notice.
+        # find_spec does not execute the package, so this costs nothing and
+        # does not drag torch in on a run that never embeds anything.
+        if encoder is None and importlib.util.find_spec("sentence_transformers") is None:
+            raise SemanticEvidenceUnavailable(
+                "sentence-transformers is not installed; "
+                "pip install -r requirements.txt to enable semantic evidence"
+            )
+
         self._np = np
         vectors = value_vectors_path(embedding_dir)
         if not vectors.exists():
@@ -134,6 +162,23 @@ class SemanticScorer:
         metadata_file = value_metadata_path(embedding_dir)
         if metadata_file.exists():
             metadata = json.loads(metadata_file.read_text())
+
+        # A count match is not an identity match, and here the count would
+        # otherwise be the *entire* guard, because the row labelling is not
+        # shipped -- it is re-derived from the catalogue. Two catalogues with
+        # the same number of distinct values would then map every row to the
+        # wrong string, silently, at the highest weight in the table. That is
+        # noise rather than silence, which is the failure this module is built
+        # to avoid, so the labelling is compared by digest the way
+        # dense_retrieval compares expected_ids element by element.
+        expected_digest = metadata.get("values_sha256")
+        if expected_digest and expected_values is not None:
+            actual = values_digest(values)
+            if actual != expected_digest:
+                raise SemanticEvidenceUnavailable(
+                    f"artifact was built from a different catalogue: values digest "
+                    f"{actual[:12]} against {expected_digest[:12]}; rebuild it"
+                )
         # The artifact ships int8 to fit the repository; the scale that
         # dequantizes it lives beside it rather than being inferred, so a
         # float32 artifact and a quantized one load through the same path.
@@ -147,11 +192,21 @@ class SemanticScorer:
         self._index = {value: row for row, value in enumerate(values)}
         self._model_id = model_id
         self._model = None
+        self._model_error: Exception | None = None
         self._injected_encoder = encoder
         self._dimensions = int(matrix.shape[1])
         # Cache of per-product row indices and of query vectors. Disclosures
         # accumulate across a session, so the same sentence is re-scored on
-        # every later turn.
+        # every later turn, and the same pooled products recur across turns.
+        #
+        # Keyed on parent_asin, which evidence._TOKEN_CACHE deliberately does
+        # *not* do -- an id is only unique within one catalogue. It is safe
+        # here because this cache belongs to a SemanticScorer instance and that
+        # instance is bound to one artifact and one catalogue, where
+        # _TOKEN_CACHE is a module global shared by every catalogue in the
+        # process. Bounded for the same reason it is: a long-lived process
+        # should not accrete indefinitely. One 50k catalogue fits with room
+        # to spare, so the submission never trips this.
         self._rows: dict[str, object] = {}
         self._vectors: dict[str, object] = {}
 
@@ -160,10 +215,19 @@ class SemanticScorer:
     def _encode(self, texts: list[str]):
         if self._injected_encoder is not None:
             return self._injected_encoder(texts)
+        if self._model_error is not None:
+            # Latched: retrying a load that already failed costs the same
+            # again on every remaining turn, and on a host with a routable but
+            # dead network that cost is socket timeouts rather than microseconds.
+            raise self._model_error
         if self._model is None:
             from .voyage_compat import load_model
 
-            self._model = load_model()
+            try:
+                self._model = load_model()
+            except Exception as error:
+                self._model_error = error
+                raise
         return self._model.encode_query(
             texts, convert_to_numpy=True, truncate_dim=self._dimensions
         )
@@ -172,9 +236,15 @@ class SemanticScorer:
         np = self._np
         missing = [text for text in texts if text not in self._vectors]
         if missing:
-            encoded = self._encode(missing)
-            encoded = np.asarray(encoded, dtype="float32")
+            # np.array rather than np.asarray: asarray returns the *same*
+            # object for an array that is already float32, so normalizing in
+            # place would rewrite whatever the encoder handed back. `encoder`
+            # is a documented seam, and an injected one is entitled to return
+            # a cached or shared array.
+            encoded = np.array(self._encode(missing), dtype="float32")
             encoded /= np.linalg.norm(encoded, axis=1, keepdims=True).clip(min=1e-12)
+            if len(self._vectors) >= _CACHE_LIMIT:
+                self._vectors.clear()
             for text, vector in zip(missing, encoded):
                 self._vectors[text] = vector
         return np.stack([self._vectors[text] for text in texts])
@@ -184,6 +254,8 @@ class SemanticScorer:
     def _rows_for(self, parent_asin: str, product: ProductRecord):
         rows = self._rows.get(parent_asin)
         if rows is None:
+            if len(self._rows) >= _CACHE_LIMIT:
+                self._rows.clear()
             rows = self._np.array(
                 [self._index[value] for value in product.card_values if value in self._index],
                 dtype="int64",
@@ -200,24 +272,28 @@ class SemanticScorer:
         """
         np = self._np
         gathered = self._matrix[rows]
-        if self._scale is None:
-            return gathered
-        restored = gathered.astype("float32") / self._scale
+        restored = gathered.astype("float32")
+        if self._scale is not None:
+            restored /= self._scale
+        # Renormalized on both branches rather than only after dequantizing.
+        # dense_retrieval does the same to its matrix "even for a hand-made
+        # artifact", and a cosine that assumes unit rows should not depend on
+        # which precision the artifact happens to be in.
         restored /= np.linalg.norm(restored, axis=1, keepdims=True).clip(min=1e-12)
         return restored
 
     def score_pool(
         self,
-        disclosures: list[str],
         candidates: list[Candidate],
         products: dict[str, ProductRecord],
         weights: list[tuple[str, float]],
-    ) -> dict:
+    ) -> dict[str, float]:
         """{parent_asin: 0-1} for the pool, or {} if there is nothing to score.
 
         `weights` is (disclosure text, content-token count), prepared by the
         caller so this module and `evidence` cannot disagree about which
-        disclosures count or what each is worth.
+        disclosures count or what each is worth. It carries the text as well as
+        the weight, which is why the raw disclosures are not a second argument.
         """
         np = self._np
         if not weights or not candidates:
@@ -261,10 +337,10 @@ def _guard_scoring_failures(scorer: SemanticScorer) -> SemanticScoreFn:
     """
     warned = False
 
-    def guarded(disclosures, candidates, products, weights):
+    def guarded(candidates, products, weights):
         nonlocal warned
         try:
-            return scorer.score_pool(disclosures, candidates, products, weights)
+            return scorer.score_pool(candidates, products, weights)
         except Exception as error:
             if not warned:
                 print(
@@ -278,13 +354,22 @@ def _guard_scoring_failures(scorer: SemanticScorer) -> SemanticScoreFn:
     return guarded
 
 
+def values_digest(values: list[str]) -> str:
+    """Identity of a row labelling, for matching an artifact to a catalogue."""
+    digest = hashlib.sha256()
+    for value in values:
+        digest.update(value.encode("utf-8"))
+        digest.update(b"\\n")
+    return digest.hexdigest()
+
+
 def load_semantic_scorer(
     embedding_dir: str | Path = EMBEDDING_DIR,
     model_id: str = VALUE_MODEL_ID,
     strict: bool = False,
     encoder: Callable[[list[str]], object] | None = None,
     expected_values: list[str] | None = None,
-):
+) -> SemanticScoreFn | None:
     """Build the scorer, or return None if it cannot run.
 
     Returning None is the supported path, not an error: the reranker then

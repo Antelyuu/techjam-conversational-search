@@ -9,10 +9,12 @@ E11's and lives in docs/experiments/, because it needs the full public set.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -23,6 +25,7 @@ from shopping_agent.semantic_evidence import (
     SemanticEvidenceUnavailable,
     SemanticScorer,
     load_semantic_scorer,
+    values_digest,
 )
 
 # A three-dimensional toy space: one axis per "meaning", so a query aimed at an
@@ -115,7 +118,7 @@ class SemanticScorerTest(ArtifactTestCase):
         fabric', so constraint_evidence scores it 0, and this scores it 1."""
         candidates, products = self.pool()
         scores = self.scorer().score_pool(
-            ["natural plant fibre"], candidates, products, [("natural plant fibre", 2.0)]
+            candidates, products, [("natural plant fibre", 2.0)]
         )
         self.assertAlmostEqual(scores["cotton"], 1.0, places=5)
         self.assertAlmostEqual(scores["leather"], 0.0, places=5)
@@ -125,7 +128,7 @@ class SemanticScorerTest(ArtifactTestCase):
         rather than the mean is what stops that diluting the match."""
         candidates, products = self.pool()
         scores = self.scorer().score_pool(
-            ["natural plant fibre"], candidates, products, [("natural plant fibre", 2.0)]
+            candidates, products, [("natural plant fibre", 2.0)]
         )
         self.assertAlmostEqual(scores["both"], scores["cotton"], places=5)
 
@@ -134,7 +137,6 @@ class SemanticScorerTest(ArtifactTestCase):
         does not must not average to a half."""
         candidates, products = self.pool()
         scores = self.scorer().score_pool(
-            ["natural plant fibre", "tanned animal hide"],
             candidates,
             products,
             [("natural plant fibre", 2.0), ("tanned animal hide", 6.0)],
@@ -146,14 +148,14 @@ class SemanticScorerTest(ArtifactTestCase):
         """The quiet-failure property the weight of 192 rests on."""
         candidates, products = self.pool()
         scores = self.scorer().score_pool(
-            ["nothing in this catalogue"], candidates, products,
+            candidates, products,
             [("nothing in this catalogue", 4.0)],
         )
         self.assertEqual(set(scores.values()), {0.0})
 
     def test_no_usable_disclosure_scores_nothing_at_all(self):
         candidates, products = self.pool()
-        self.assertEqual(self.scorer().score_pool([], candidates, products, []), {})
+        self.assertEqual(self.scorer().score_pool(candidates, products, []), {})
 
     def test_int8_storage_agrees_with_float32(self):
         """The artifact ships quantized to fit the repository; E11 measured the
@@ -162,10 +164,10 @@ class SemanticScorerTest(ArtifactTestCase):
         candidates, products = self.pool()
         weights = [("natural plant fibre", 2.0)]
         exact = self.scorer("float32").score_pool(
-            ["natural plant fibre"], candidates, products, weights
+            candidates, products, weights
         )
         quantized = self.scorer("int8").score_pool(
-            ["natural plant fibre"], candidates, products, weights
+            candidates, products, weights
         )
         for asin in exact:
             self.assertAlmostEqual(exact[asin], quantized[asin], places=4, msg=asin)
@@ -174,7 +176,7 @@ class SemanticScorerTest(ArtifactTestCase):
         candidates, products = self.pool()
         candidates.append(candidate("ghost", 9))
         scores = self.scorer().score_pool(
-            ["natural plant fibre"], candidates, products, [("natural plant fibre", 2.0)]
+            candidates, products, [("natural plant fibre", 2.0)]
         )
         self.assertNotIn("ghost", scores)
 
@@ -205,6 +207,50 @@ class DegradationTest(ArtifactTestCase):
         with self.assertRaises(SemanticEvidenceUnavailable):
             SemanticScorer(directory, encoder=encoder)
 
+    def test_an_artifact_from_another_catalogue_is_refused(self):
+        """A count match is not an identity match. The row labelling is derived
+        from the catalogue rather than shipped, so without this a catalogue with
+        the same number of distinct values would map every row to the wrong
+        string -- silently, at the heaviest weight in the table."""
+        directory = self.artifact()
+        slug = "voyage-4-nano-values256"
+        metadata = json.loads((directory / f"{slug}.meta.json").read_text())
+        metadata["values_sha256"] = values_digest(VALUES)
+        (directory / f"{slug}.meta.json").write_text(json.dumps(metadata))
+
+        # Same count, different strings.
+        with self.assertRaises(SemanticEvidenceUnavailable):
+            SemanticScorer(directory, encoder=encoder,
+                           expected_values=["a", "b", "c"])
+        # The real labelling still loads.
+        SemanticScorer(directory, encoder=encoder, expected_values=list(VALUES))
+
+    def test_a_missing_dependency_disables_the_feature_at_load(self):
+        """Requirement: no sentence-transformers must mean None from
+        load_semantic_scorer, so the operator hears about it at startup rather
+        than on the first turn that happens to carry a disclosure."""
+        real_find_spec = importlib.util.find_spec
+
+        def missing(name, *args, **kwargs):
+            if name == "sentence_transformers":
+                return None
+            return real_find_spec(name, *args, **kwargs)
+
+        directory = self.artifact()
+        with mock.patch.object(importlib.util, "find_spec", missing):
+            self.assertIsNone(load_semantic_scorer(directory))
+            # An injected encoder needs no such dependency, so it still loads.
+            self.assertIsNotNone(load_semantic_scorer(directory, encoder=encoder))
+
+    def test_the_encoder_s_own_array_is_not_normalized_in_place(self):
+        """`encoder` is a public seam, so an injected one may hand back a cached
+        or shared array. Normalizing it in place would corrupt the caller's copy
+        and make the second call read a doubly-normalized value."""
+        handed_out = np.array([[3.0, 4.0, 0.0]], dtype="float32")
+        scorer = SemanticScorer(self.artifact(), encoder=lambda texts: handed_out)
+        scorer._embed(["anything"])
+        np.testing.assert_array_equal(handed_out, np.array([[3.0, 4.0, 0.0]], "float32"))
+
     def test_an_encoder_that_raises_costs_the_feature_and_not_the_turn(self):
         def broken(texts):
             raise RuntimeError("boom")
@@ -213,7 +259,7 @@ class DegradationTest(ArtifactTestCase):
         self.assertIsNotNone(scorer)
         products = {"cotton": product("cotton", ["cotton fabric"])}
         candidates = [candidate("cotton")]
-        self.assertEqual(scorer(["x"], candidates, products, [("x", 1.0)]), {})
+        self.assertEqual(scorer(candidates, products, [("x", 1.0)]), {})
 
 
 class RerankingIntegrationTest(ArtifactTestCase):

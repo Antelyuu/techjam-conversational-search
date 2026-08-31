@@ -31,6 +31,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from typing import TYPE_CHECKING
+
 from . import evidence
 from . import slots
 from .catalog import ProductRecord
@@ -41,6 +43,9 @@ from .filtering import (
     score_category,
     soft_budget_closeness,
 )
+
+if TYPE_CHECKING:  # imported for typing only; this module never needs numpy
+    from .semantic_evidence import SemanticScoreFn
 
 # MEASURED, and not what the checklist order suggests. Weighting the features
 # in P4's stated priority order -- hard_constraints 4.0 down to
@@ -413,7 +418,7 @@ def prepare_evidence(
     disclosures: list[str],
     candidates: list[Candidate],
     products: dict[str, ProductRecord],
-    semantic_scorer=None,
+    semantic_scorer: "SemanticScoreFn | None" = None,
 ) -> DisclosureEvidence:
     """Normalize the disclosures once and price each by how rare it is here.
 
@@ -434,7 +439,7 @@ def prepare_evidence(
     semantic: dict[str, float] = {}
     if semantic_scorer is not None:
         semantic = semantic_scorer(
-            disclosures, candidates, products, evidence.disclosure_weights(disclosures)
+            candidates, products, evidence.disclosure_weights(disclosures)
         )
 
     pool = [
@@ -475,6 +480,20 @@ def prepare_evidence(
     # or nothing on live_disclosures == 0 -- is worse than either, because a
     # partly-reworded turn has some disclosures still owned and the hard form
     # switches the feature off exactly when it is half needed.
+    #
+    # Two things this is deliberately not. It is a **scalar over the pool**,
+    # not a per-disclosure mask: a candidate matching only the disclosures that
+    # *are* owned still earns credit, scaled down. Zeroing w_d for owned
+    # disclosures inside score_pool would be the faithful form, and is the
+    # obvious next experiment rather than a fix -- E11 measured this shape and
+    # it wins on both sides, so it is not being changed on an argument.
+    #
+    # And the denominator counts disclosures that survive `canonical()`, while
+    # the numerator's weights come from evidence.disclosure_weights, which also
+    # applies MIN_EVIDENCE_TOKENS. A disclosure of pure stopwords therefore
+    # sits in the denominator without contributing to the score, nudging the
+    # share up. Both filters are permissive at MIN_EVIDENCE_TOKENS=1, so this
+    # is a rounding-level difference, but the two rules are not the one rule.
     if semantic and normalized and live:
         unowned_share = (len(normalized) - len(live)) / len(normalized)
         semantic = {asin: value * unowned_share for asin, value in semantic.items()}

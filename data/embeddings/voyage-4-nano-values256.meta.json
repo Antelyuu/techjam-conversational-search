@@ -1,6 +1,7 @@
 {
   "derived_from": "voyage-4-nano-values",
   "values": 268564,
+  "values_sha256": "32d42bfdf31ea4333771e449a495dd325b020cb7717a01300ca4c02db109c777",
   "dimensions": 256,
   "precision": "int8",
   "quantization_scale": 387.9558405003226,

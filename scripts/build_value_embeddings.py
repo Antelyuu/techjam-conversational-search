@@ -53,6 +53,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from shopping_agent.catalog import load_catalog
 from shopping_agent.embedding_config import EMBEDDING_DIR
+from shopping_agent.semantic_evidence import values_digest
+# The transformers 5.x shim lives with the runtime scorer, not here. Having a
+# second copy of it in this file was the thing its own docstring promised
+# would not happen: the two would agree until one was edited, and a mask that
+# quietly differs between how the catalogue was encoded and how a query is
+# encoded degrades quality without erroring.
+from shopping_agent.voyage_compat import MAX_SEQ_LENGTH, load_model as load_voyage_model
 
 # (hugging face id, document-side prefix, artifact slug).
 MODELS = {
@@ -60,58 +67,6 @@ MODELS = {
     "bge": ("BAAI/bge-small-en-v1.5", "", "bge-small-en-v1.5-values"),
     "voyage": ("voyageai/voyage-4-nano", None, "voyage-4-nano-values"),
 }
-
-# Card values are short -- median 47 characters, 180 at the 95th percentile,
-# and the card generator clips at 180 -- so this truncates nothing real while
-# keeping attention cost down on the larger model.
-MAX_SEQ_LENGTH = 256
-
-
-def load_voyage_model():
-    """Load voyageai/voyage-4-nano under transformers 5.x.
-
-    The published remote code targets transformers 4.51 and does not load as
-    written on 5.x. Two incompatibilities, both mechanical:
-
-      * `Qwen3BidirectionalModel` declares no `config_class`, and AutoModel's
-        registration path dereferences it.
-      * `create_causal_mask` renamed `input_embeds` to `inputs_embeds` and
-        dropped `cache_position`, which the model still passes.
-
-    The shim is confined to this function so nothing else has to know. It was
-    verified rather than assumed: the model card's own retrieval example picks
-    the right document (0.650 against 0.541/0.533/0.403), encoding is
-    padding-invariant, and the shimmed mask agrees with transformers' native
-    `create_bidirectional_mask` to within 0.995-1.000 -- two independent
-    constructions of the same mask.
-    """
-    from transformers import Qwen3Config
-    from transformers.dynamic_module_utils import get_class_from_dynamic_module
-    from sentence_transformers import SentenceTransformer
-
-    model_class = get_class_from_dynamic_module(
-        "modeling_qwen3_bidirectional.Qwen3BidirectionalModel", "voyageai/voyage-4-nano"
-    )
-    model_class.config_class = Qwen3Config
-    module = sys.modules[model_class.__module__]
-    if not hasattr(module, "_original_create_causal_mask"):
-        module._original_create_causal_mask = module.create_causal_mask
-
-    original = module._original_create_causal_mask
-
-    def create_causal_mask(*args, **kwargs):
-        kwargs.pop("cache_position", None)
-        if "input_embeds" in kwargs:
-            kwargs["inputs_embeds"] = kwargs.pop("input_embeds")
-        return original(*args, **kwargs)
-
-    module.create_causal_mask = create_causal_mask
-    return SentenceTransformer(
-        "voyageai/voyage-4-nano",
-        trust_remote_code=True,
-        model_kwargs={"attn_implementation": "sdpa"},
-    )
-
 
 def distinct_values(catalog_path: str | Path) -> list[str]:
     """Every card value in the catalogue, deduplicated and sorted."""
@@ -135,7 +90,6 @@ def build(
 
     if model_key == "voyage":
         model = load_voyage_model()
-        model.max_seq_length = MAX_SEQ_LENGTH
         extra = {"truncate_dim": truncate_dim} if truncate_dim else {}
         # encode_document applies the model's own document prompt.
         encode = lambda batch: model.encode_document(
@@ -175,6 +129,7 @@ def build(
     metadata = {
         "model_id": model_id,
         "values": len(values),
+        "values_sha256": values_digest(values),
         "dimensions": int(matrix.shape[1]),
         "build_minutes": round((time.time() - started) / 60, 2),
         "megabytes": round(matrix.nbytes / 1024 / 1024, 1),
@@ -220,9 +175,12 @@ def derive(
     (directory / f"{target_slug}.values.json").write_bytes(
         (directory / f"{source_slug}.values.json").read_bytes()
     )
+
+    values = json.loads((directory / f"{source_slug}.values.json").read_text())
     metadata = {
         "derived_from": source_slug,
         "values": int(quantized.shape[0]),
+        "values_sha256": values_digest(values),
         "dimensions": int(quantized.shape[1]),
         "precision": "int8",
         # Dequantize with vector / quantization_scale, then renormalize.
