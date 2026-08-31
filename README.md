@@ -50,8 +50,9 @@ python3 -m evaluator.local_evaluator     # no network, no env vars
 - [Team contributions](#team-contributions)
 - [Where everything is](#where-everything-is)
 
-**Going deeper:** [`docs/experiments/`](docs/experiments/) holds the nine decision records
-(E1–E9) — every measurement, the reasoning behind each choice, and the ideas we rejected.
+**Going deeper:** [`docs/experiments/`](docs/experiments/) holds the eleven decision
+records (E1–E11) — every measurement, the reasoning behind each choice, and the ideas we
+rejected.
 [`docs/SETUP.md`](docs/SETUP.md) is the operator's manual.
 
 ---
@@ -79,7 +80,9 @@ something we skipped: we built a full dense semantic route in Phase 3, measured 
 
 ## How it finds the target
 
-Four mechanisms, all following from the ownership observation above.
+Five mechanisms. The first four follow from the ownership observation above; the fifth
+exists because that observation is a property of *this* benchmark, and the fifth is what
+happens when it does not hold.
 
 ### 1. Slot ownership — `shopping_agent/slots.py`
 
@@ -166,6 +169,46 @@ signal, and it switches the policy off entirely on a distribution it cannot read
 
 Please read [the caveat](#the-shortlist-policy-is-shaped-by-this-metric) before defending
 this one.
+
+### 5. Score meaning when the customer stops quoting — `shopping_agent/semantic_evidence.py`
+
+Everything above rests on the customer handing back the target's own strings. That is
+true of this simulator and it is not true of shopping, and the specification reserves the
+organiser's right to add paraphrasing. So we replayed all 200 sessions through a customer
+who rewords instead of quoting, and watched the agent fall from 0.945 to 0.696.
+
+The feature that failed worst was the one that looked safest. `constraint_evidence`
+counted shared tokens, and the argument for its weight of 12 was that a paraphrase would
+match nothing and it would fall silent. It does not: it scores *partial* overlap, so
+rewording fills it with whichever words happened to survive. **Deleting it outright made
+the paraphrased score go up.**
+
+It is now replaced by the same question asked semantically — the cosine between what the
+customer said and each candidate's own field values, at exactly the granularity slot
+ownership uses. A customer who says "natural plant fibre" instead of "100% Cotton" shares
+no token with the target and every bit of the meaning.
+
+The part worth stealing is not the embedding, it is the **gate**. At weight 192 this
+feature outranks slot ownership by an order of magnitude, which is correct once ownership
+has gone dark and wrong before it has — ungated, it lost a hit on the verbatim set. So it
+is scaled by the share of disclosures *no candidate owns*: it speaks exactly as loudly as
+the exact features are silent. That version is better on both sides at once — it restores
+HitRate 1.000 here **and** beats the ungated form under paraphrase.
+
+| | verbatim (scored) | paraphrased |
+|---|---|---|
+| before | 0.945497 / HitRate 1.000 | 0.696015 / 0.805 |
+| after | 0.945297 / HitRate 1.000 | **0.847762 / 0.975** |
+
+The model is `voyage-4-nano`, Apache-2.0 open weights run locally: no API key, no network,
+0 tokens, $0. It was chosen on measurement over MiniLM and bge-small, and it is the only
+one of the three whose catalogue artifact fits a git repository — Matryoshka truncation to
+256 dimensions and int8 storage bring 268,564 vectors to 66 MB, for six millionths of
+quality. It is off in one step and the scored number does not change.
+
+Full comparison, including the two models that lost and the ideas that were measured and
+rejected, in
+[docs/experiments/E11-p7-semantic-evidence-and-model-selection.md](docs/experiments/E11-p7-semantic-evidence-and-model-selection.md).
 
 ### Everything is inspectable
 
@@ -304,8 +347,9 @@ retrieve()                        shopping_agent/retrieval.py
       │
       ▼
 rerank()                          shopping_agent/reranking.py
-   deterministic 10-feature scorer, led by slot ownership,
-   phrase containment and token coverage. No learned parameters.
+   deterministic 11-feature scorer, led by slot ownership and
+   phrase containment, with semantic evidence taking over as
+   they go quiet. No learned parameters.
       │
       ▼
 shortlist_size()                  shopping_agent/shortlist.py
@@ -562,14 +606,23 @@ E9 because it will look like a bug to the next reader too.
 
 HitRate is finished at 1.000 and cannot rise. What is left is MRR at 0.938657, worth at
 most another +0.0184, and the reranker's entire adjustment half is now inert, so closing
-that gap would take a new discriminator rather than a retune. MTTC of 2.805 is bounded
+that gap would take a new discriminator rather than a retune. MTTC of 2.815 is bounded
 below by structure as much as by ranking, since an Intent Override session cannot register
 a hit before its override turn, which falls on turn 3 or 4.
 
-*Given more time:* generalise slot ownership beyond exact-value equality to a normalised
-attribute graph, so it survives the messier structured data of a real catalogue; and
-re-price every constant on a second product category, since all of them were tuned against
-clothing.
+**The headroom that is actually open is not on this scoreboard.** Against a paraphrasing
+customer the target still sits at median rank 7 of 400, where a quoting customer puts it
+at 2, and a perfect reranker over the same retrieval would score 0.990300 — so about
+0.14 of composite is still reachable by ranking alone, and none of it by retrieval, whose
+recall under paraphrase is already 1.000.
+
+*Given more time:* `slot_evidence`, still the second-heaviest feature, is whole-string
+equality and would take the same semantic treatment `constraint_evidence` just got;
+generalise slot ownership beyond exact-value equality to a normalised attribute graph, so
+it survives the messier structured data of a real catalogue; build a harder held-out
+paraphraser, because the current one is too easy to separate two good embedding models;
+and re-price every constant on a second product category, since all of them were tuned
+against clothing.
 
 ---
 
