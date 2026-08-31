@@ -182,6 +182,29 @@ matching scores zero on all three — every mechanism that carries the public be
 silent here — and the agent still converges, because the embedding model recognises that
 "tanned animal hide" and "leather" mean the same thing.
 
+### Opening the conversation
+
+The same concern applies to the customer's *first* message. The simulator always opens
+with one of a handful of phrasings, so we originally recognised only those — and a real
+customer who asks a question instead got no category at all, which widens retrieval from a
+median 184 products to all 50,000.
+
+The agent now identifies the category by looking for it, rather than by looking for the
+phrasing around it:
+
+| opener | category recognised |
+|---|---|
+| `I'm looking for Shoes Loafers & Slip-Ons.` | ✅ |
+| `Hey, do you have any Shoes Loafers & Slip-Ons?` | ✅ |
+| `Could you show me women dresses please?` | ✅ |
+| `hiya, after some accessories belts` | ✅ |
+| `I need a gift for my wife` | — *(names no category)* |
+
+It returns nothing rather than a guess when no category is named, because the category is
+a hard restriction on retrieval: a wrong one loses the session, a missing one only widens
+the search. Full account in
+[`docs/experiments/E15`](docs/experiments/E15-p8-conversational-openers.md).
+
 ### What it is worth
 
 Replaying all 200 public sessions through a paraphrasing customer:
@@ -276,7 +299,7 @@ Nothing that can go wrong is allowed to cost a session, and no degradation is si
 - every degradation prints its reason once to stderr, so a degraded run is visible rather
   than merely scoring lower.
 
-**223 unit tests** cover this, standard library only, in about three seconds — including
+**237 unit tests** cover this, standard library only, in about three seconds — including
 the semantic feature's own degradation paths, which run against a synthetic artifact so
 the suite never loads a model.
 
@@ -352,7 +375,7 @@ that scales with traffic.
 
 ```bash
 python3 -m evaluator.local_evaluator                      # the official harness
-python3 -m unittest discover -s tests -t .                # 223 tests
+python3 -m unittest discover -s tests -t .                # 237 tests
 python3 -m scripts.demo_session --scenario buying         # one readable transcript
 python3 -m scripts.demo_session --paraphrase 2            # …with a paraphrasing customer
 pip install -r requirements.txt                           # OPTIONAL — enables mechanism 5
@@ -383,9 +406,13 @@ target's rank on first appearance, *when* to commit is worth real score. We tune
 deliberately. A metric rewarding browsing breadth would want a different policy, and we
 would not defend this one outside this scoring function.
 
-**Constraint extraction is regex over a known vocabulary.** It handles the simulator's
-phrasing and the paraphrase generators we tested, and it would not survive genuinely
-open-ended conversation. The semantic feature mitigates this but does not remove it.
+**The agent handles natural phrasing, not open-ended dialogue.** Openers are matched
+against the catalogue's own category vocabulary rather than a fixed list of phrasings, and
+answers are absorbed however they are worded. But constraint extraction remains regex over
+a known vocabulary, so an indirect request — *"I've a wedding next month and need
+something that won't destroy my feet"* — names no category and states no constraint we can
+parse. Closing that requires a language model in the loop, which would cost the offline,
+deterministic, zero-token properties above.
 
 **The customer profile is accepted and never used.** We found no measurable signal in it,
 and chose not to add a feature we could not justify with a number.
@@ -398,7 +425,7 @@ of the remaining gap is retrieval's to win.
 
 ## How decisions were made
 
-Fourteen written decision records in [`docs/experiments/`](docs/experiments/) hold every
+Fifteen written decision records in [`docs/experiments/`](docs/experiments/) hold every
 measurement, the reasoning behind each choice, and the ideas we rejected. Four rules came
 out of the process and did more work than any individual idea:
 
@@ -423,7 +450,7 @@ are recorded in the corresponding experiment file.
 
 | | contribution |
 |---|---|
-| **Lin Minhong** ([@coffee-678](https://github.com/coffee-678)) | Conversation state and orchestration; constraint-aware lexical retrieval and price/category filtering; the dense route end to end, and the measurement that later removed it; disclosed-evidence scoring, phrase containment and pool-depth tuning; slot ownership, exact category matching, category-filtered retrieval, the shortlist policy, and the paraphrase-robustness programme. Records E1, E2, E5–E9, E11–E14. |
+| **Lin Minhong** ([@coffee-678](https://github.com/coffee-678)) | Conversation state and orchestration; constraint-aware lexical retrieval and price/category filtering; the dense route end to end, and the measurement that later removed it; disclosed-evidence scoring, phrase containment and pool-depth tuning; slot ownership, exact category matching, category-filtered retrieval, the shortlist policy, and the paraphrase-robustness programme. Records E1, E2, E5–E9, E11–E15. |
 | **Lim Ray Hing** ([@rayhing1510](https://github.com/rayhing1510)) | Phase 4, which took the score from 0.151 to 0.637: the deterministic final scorer and its inspectable feature checklist; one clarification question per turn and the attribute-choice policy; the failure-path hardening that guarantees nothing escapes `respond()`; the reranker weight sweep harness and the retuning it drove. Records E3, E4. |
 | **Joel Rhys Chee** ([@Antelyuu](https://github.com/Antelyuu)) | Phase 0 baseline and the phase execution skeleton that structured the project; agent behaviour documentation; Phase 1 test coverage; Phase 2 constraint-safety work and audit; Phase 3 validation and fallback hardening; offline artifact bundling. |
 | **Lim Dao Hao** and **Edrich Denzil Lim Yu** | Independent component testing and score diagnosis across all phases. They identified which sessions were failing and isolated the responsible component — distinguishing a retrieval defect from a ranking one, which have nothing in common as fixes — then broke each phase's score into the parts that could still move. Their diagnosis set the agenda for every phase. |
@@ -439,7 +466,7 @@ rather than team contributions.
 |---|---|
 | [`starter/agent.py`](starter/agent.py) | the official `Agent` entry point |
 | [`docs/SETUP.md`](docs/SETUP.md) | install, reproduce, ablations, config flags, tests, module map |
-| [`docs/experiments/`](docs/experiments/) | E1–E14: every measurement, including the rejected ideas |
+| [`docs/experiments/`](docs/experiments/) | E1–E15: every measurement, including the rejected ideas |
 | [`docs/dense_route.md`](docs/dense_route.md) | the dense route, and why we removed it |
 | [`docs/competition_specification.md`](docs/competition_specification.md) | the rules and evaluation protocol |
 | [`DATA_ATTRIBUTION.md`](DATA_ATTRIBUTION.md) | catalogue derived from Amazon Reviews 2023, McAuley Lab, UCSD |

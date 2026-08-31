@@ -14,7 +14,12 @@ from shopping_agent.semantic_evidence import catalogue_values, load_semantic_sco
 from shopping_agent.orchestrator import ConversationOrchestrator
 from shopping_agent.reranking import prepare_evidence, rerank
 from shopping_agent.retrieval import DEFAULT_FUSION, FUSION_METHODS, retrieve
-from shopping_agent.slots import canonical_category, coarse_category
+from shopping_agent.slots import (
+    canonical_category,
+    category_token_index,
+    coarse_category,
+    match_category_in_text,
+)
 from shopping_agent.text import tokenize
 
 
@@ -256,7 +261,10 @@ class Agent:
     ) -> None:
         self.catalog_path = Path(catalog_path)
         self.connection = sqlite3.connect(":memory:")
-        self.orchestrator = ConversationOrchestrator()
+        # Built on first use, because the catalogue that fills
+        # _known_categories is loaded after this point.
+        self._category_index: list[tuple[str, frozenset[str]]] | None = None
+        self.orchestrator = ConversationOrchestrator(self._category_from_free_text)
         self.products: dict[str, ProductRecord] = {}
         # Every coarse category the catalogue can reproduce, and the same set
         # again keyed by canonical form. A stated category that matches
@@ -559,6 +567,38 @@ class Agent:
             return (stated,)
         siblings = self._categories_by_canonical.get(canonical_category(stated))
         return tuple(sorted(siblings)) if siblings else ()
+
+    def _category_from_free_text(self, message: str, stated: str | None) -> str | None:
+        """The category a conversationally-phrased opener names, if any.
+
+        P8-T3. `slots.stated_category` recognises nine lead-in phrasings, which
+        is every phrasing the simulator produces and not every phrasing a
+        customer produces. "Hey, do you have any loafers & slip-ons?" yields
+        nothing from it, and a missing category stands the E9 filter down --
+        retrieval widens from a median 184 rows to all 50,000.
+
+        Consulted **only** when the lead-in patterns return None, so no opener
+        that parses today can be rerouted through here. That is what makes the
+        public score safe by construction rather than by measurement, though it
+        is measured too.
+
+        Returns None rather than a guess when nothing matches: the category is
+        a hard restriction on retrieval, so a wrong one costs the session
+        outright while a missing one only widens the search.
+        """
+        if stated and self._resolve_categories(stated):
+            # The lead-in produced something the catalogue actually has. That
+            # is every opener on the public set, which is why this path cannot
+            # move the scored number.
+            return stated
+        if self._category_index is None:
+            self._category_index = category_token_index(self._known_categories)
+        # `stated` here is either None or a phrase no category matches -- the
+        # regex having matched "I need" and returned the rest of the sentence.
+        # Preferring a real category over that is strictly an improvement, and
+        # keeping the original when nothing is found preserves the old
+        # behaviour exactly.
+        return match_category_in_text(message, self._category_index) or stated
 
     def _lexical_search(
         self, query_text: str, limit: int, category: str | tuple[str, ...] | None = None

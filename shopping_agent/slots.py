@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import math
 import re
+from typing import Iterable
 
 # The card generator's own normalization, reproduced exactly. Any drift here
 # shows up as the target failing to own its own disclosure, which is why
@@ -143,6 +144,66 @@ _STATED_CATEGORY_RE = re.compile(
 # collisions are word-order pairs of each other ("Shoes Clogs & Mules" /
 # "Shoes Mules & Clogs"), which is the distinction this is meant to ignore.
 _CANONICAL_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+# --- Free-text category recognition (P8-T3) -----------------------------------
+#
+# `stated_category` below asks "does this message begin with a phrasing I know,
+# and what follows it?". That is right for the simulator, whose opener always
+# uses one of nine lead-ins, and wrong for a customer who opens with "Hey, do
+# you have any loafers?" -- which yields no category, stands the E9 filter down,
+# and widens retrieval from a median 184 rows to all 50,000.
+#
+# This asks the other question: **does this message name a category I know?**
+# It is checked only after the lead-in patterns fail, so every opener that
+# parses today parses identically today.
+#
+# All-tokens-present is deliberately strict. The catalogue's 1,115 coarse
+# categories have a median of four tokens and **not one** is a single token, so
+# requiring every token keeps the false-positive rate low without needing a
+# similarity threshold to tune. "loafers" alone does not match
+# "Shoes Loafers & Slip-Ons"; it takes the whole name.
+#
+# Most-specific-wins is what makes the twenty all-generic categories
+# ("Men Shoes", "Women Jewelry") safe to keep in the vocabulary: they match only
+# when nothing longer does.
+
+
+def category_token_index(categories: "Iterable[str]") -> list[tuple[str, frozenset[str]]]:
+    """Prepare a category vocabulary for `match_category_in_text`.
+
+    Sorted longest-first so the first full match found is the most specific
+    one, and alphabetically within a length so the choice between two equally
+    specific categories is deterministic rather than dict-ordered.
+    """
+    indexed = [
+        (category, frozenset(_CANONICAL_TOKEN_RE.findall(category.lower())))
+        for category in categories
+    ]
+    indexed = [entry for entry in indexed if entry[1]]
+    indexed.sort(key=lambda entry: (-len(entry[1]), entry[0]))
+    return indexed
+
+
+def match_category_in_text(
+    message: str, index: list[tuple[str, frozenset[str]]]
+) -> str | None:
+    """The most specific catalogue category this message names in full, if any.
+
+    Returns None rather than a best guess: an unrecognised opener must leave
+    the category filter switched off, which is the behaviour that already
+    exists and is safe. A wrong category would be worse than none, because the
+    filter is a hard restriction on retrieval rather than a ranking hint.
+    """
+    if not message or not index:
+        return None
+    spoken = frozenset(_CANONICAL_TOKEN_RE.findall(message.lower()))
+    if not spoken:
+        return None
+    for category, tokens in index:
+        if tokens <= spoken:
+            return category
+    return None
 
 
 def canonical_category(text: str) -> str:

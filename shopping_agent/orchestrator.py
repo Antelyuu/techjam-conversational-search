@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from typing import Callable
 
 from . import clarification
 from . import evidence
@@ -100,8 +101,16 @@ class ConversationOrchestrator:
     only produces the updated SessionState and the SearchRequest for the
     current turn."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        category_fallback: "Callable[[str, str | None], str | None] | None" = None,
+    ) -> None:
         self.store = state_module.SessionStore()
+        # Consulted only when `slots.stated_category` finds nothing, so it can
+        # never displace an opener the lead-in patterns already parse. The
+        # agent supplies it because the catalogue vocabulary lives there; left
+        # None (the tests, any direct user) the behaviour is exactly as before.
+        self._category_fallback = category_fallback
 
     def reset(self, session_id: str, user_profile: dict) -> SessionState:
         return self.store.create(session_id, user_profile)
@@ -114,7 +123,18 @@ class ConversationOrchestrator:
             # Stated once and never restated. Even the Intent Override never
             # revises it -- the generator swaps constraints within one target,
             # so the category it opened with still holds.
-            state.stated_category = slots.stated_category(user_message)
+            stated = slots.stated_category(user_message)
+            if self._category_fallback is not None:
+                # P8-T3. The lead-in patterns answer "what follows a phrasing I
+                # know?", which returns nothing for "do you have any loafers?"
+                # and returns *junk* for "I need a gift for my wife" -- the
+                # pattern matches "I need" and hands back the rest. Only the
+                # agent can tell those apart, because only it holds the
+                # catalogue vocabulary, so it decides. It is contracted to
+                # return `stated` unchanged whenever `stated` already names a
+                # real category.
+                stated = self._category_fallback(user_message, stated)
+            state.stated_category = stated
 
         candidates = intent_module.extract_candidate_slots(user_message)
         override_triggered = intent_module.detect_override_cue(user_message)
