@@ -60,8 +60,10 @@ candidate's field values by meaning rather than by shared tokens. It is on by de
 when its dependencies are present and it changes nothing on the public set — the score
 is 0.945297 either way, because the feature is gated to stay silent while exact slot
 ownership is still working. What it buys is the case the public set never exercises: on
-a paraphrased replay of the same 200 sessions the score goes 0.696015 -> 0.847762 and
-HitRate 0.805 -> 0.975.
+a paraphrased replay of the same 200 sessions the score goes 0.696015 -> 0.875897 and
+HitRate 0.805 -> 0.965. (E11 shipped the feature at 0.847762; E13 and E14 took it to
+0.875897 by changing *when* the agent commits and *what* it asks, both free on the
+public set.)
 
 The model is `voyageai/voyage-4-nano`, Apache-2.0 open weights run locally: no API key,
 no network at inference time, 0 tokens, $0. Its 66 MB catalogue artifact is bundled in
@@ -205,7 +207,7 @@ offline replay cannot silently drift from the thing it models.
 python3 -m unittest discover -s tests -t . -q
 ```
 
-196 tests, standard library only, about 3 seconds. The semantic feature's tests run
+223 tests, standard library only, about 3 seconds. The semantic feature's tests run
 against a synthetic three-dimensional artifact and an injected encoder, so the suite
 never loads a model or touches the bundled 66 MB one.
 
@@ -232,7 +234,7 @@ what the official run uses.
 |---|---|---|
 | `SHOPPING_AGENT_SHORTLIST` | `1` | confidence-sized shortlist. `0` gives always-ten, measuring 0.885293 |
 | `SHOPPING_AGENT_CATFILTER` | `1` | retrieve inside the stated category. `0` gives catalogue-wide, measuring 0.942229 |
-| `SHOPPING_AGENT_SEMANTIC` | `1` | semantic evidence. `0` (or no `pip install -r requirements.txt`) measures the same 0.945297 here, and 0.696015 instead of 0.847762 under paraphrase |
+| `SHOPPING_AGENT_SEMANTIC` | `1` | semantic evidence. `0` (or no `pip install -r requirements.txt`) measures the same 0.945297 here, and 0.705561 instead of 0.875897 under paraphrase |
 | `SHOPPING_AGENT_DENSE` | `0` | enable the dense semantic route |
 | `SHOPPING_AGENT_FUSION` | `weighted` | route blend: `weighted` or `rrf` |
 | `SHOPPING_AGENT_RERANK` | `1` | deterministic reranker |
@@ -241,6 +243,10 @@ what the official run uses.
 | `SHOPPING_AGENT_WILDCARD` | `1` | allow the `other` wildcard question |
 | `SHOPPING_AGENT_DISAGREEMENT` | `1` | use candidate disagreement in question choice |
 | `SHOPPING_AGENT_BLOCK_SOFT` | `0` | block soft slots from being asked |
+| `SHOPPING_AGENT_PARAPHRASE_SHORTLIST` | `0` | what to return once the customer has disclosed and no candidate owns any of it. `10` restores the pre-E13 always-ten. Fires 0/563 verbatim turns, so no value changes the public score |
+| `SHOPPING_AGENT_WILDCARD_CAP` | `3` | most consecutive `other` questions allowed under paraphrase (E14). Measured identical to uncapped on all seven probes |
+| `SHOPPING_AGENT_REPEAT_WILDCARD` | `0` | `1` exempts `other` from the no-repeat rule even when the customer is quoting. Measurement arm only: ungated it costs 0.002264 of public score |
+| `SHOPPING_AGENT_SEMANTIC_WEIGHT` | `192` | measurement override for the semantic feature's weight (E12 re-swept 96-1536; 192 wins) |
 
 ---
 
