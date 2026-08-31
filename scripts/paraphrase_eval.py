@@ -29,6 +29,7 @@ import re
 import statistics
 
 from evaluator import local_evaluator as ev
+from shopping_agent.slots import stated_category as _stated_category
 
 # Synonyms chosen to share NO token with the word they replace -- the FTS5 index
 # is `unicode61` with no stemmer, and shopping_agent/text.py tokenizes on bare
@@ -191,7 +192,11 @@ def reword_category(category: str) -> str:
 
 
 def install_paraphrasing_customer(
-    level: int, paraphrase_category: bool, seed: int, reword_cat: bool = False
+    level: int,
+    paraphrase_category: bool,
+    seed: int,
+    reword_cat: bool = False,
+    keep_opener: bool = False,
 ) -> dict:
     """Monkeypatch the simulator's two text-producing functions.
 
@@ -201,7 +206,7 @@ def install_paraphrasing_customer(
     real_reply = ev.customer_reply
     real_initial = ev.initial_message
     rng = random.Random(seed)
-    stats = {"utterances": 0, "overlap": []}
+    stats = {"utterances": 0, "overlap": [], "openers": 0, "openers_parsed": 0}
 
     def measure(said: str, source_terms: set[str]) -> None:
         said_terms = {w.lower() for w in _WORD.findall(said) if len(w) > 1}
@@ -227,6 +232,9 @@ def install_paraphrasing_customer(
     def patched_initial(sample, category, disclosed):
         text = real_initial(sample, category, disclosed)
         if level == 0 and not reword_cat:
+            stats["openers"] += 1
+            if _stated_category(text) is not None:
+                stats["openers_parsed"] += 1
             return text
         cat = substitute(category, level, rng) if paraphrase_category else category
         if reword_cat:
@@ -236,21 +244,41 @@ def install_paraphrasing_customer(
             scenario = sample["scenario_type"]
             if scenario == "buying" and sample["intent_card"].get("hard_constraints"):
                 raw = str(sample["intent_card"]["hard_constraints"][0])
-                return f"I'm looking for {cat}. A key requirement is: {raw}."
+                text = f"I'm looking for {cat}. A key requirement is: {raw}."
+                stats["openers"] += 1
+                if _stated_category(text) is not None:
+                    stats["openers_parsed"] += 1
+                return text
             if scenario == "intent_override":
                 old = str(sample["behavior"]["override"]["old_value"])
-                return f"I'm looking for {cat}. {old}"
-            return f"I'm looking for {cat}, but I'm still exploring."
+                text = f"I'm looking for {cat}. {old}"
+            else:
+                text = f"I'm looking for {cat}, but I'm still exploring."
+            stats["openers"] += 1
+            if _stated_category(text) is not None:
+                stats["openers_parsed"] += 1
+            return text
         scenario = sample["scenario_type"]
         if scenario == "buying" and sample["intent_card"].get("hard_constraints"):
             raw = str(sample["intent_card"]["hard_constraints"][0])
-            opener = OPENERS[rng.randrange(1, len(OPENERS))]
+            # Drawn whether or not the opener is kept, and only on the branch
+            # that drew before this flag existed, so --keep-opener moves the
+            # opener's wording and leaves every other paraphrase decision in
+            # the run bit-for-bit unchanged.
+            opener_choice = rng.randrange(1, len(OPENERS))
+            opener = OPENERS[0] if keep_opener else OPENERS[opener_choice]
             text = opener.format(cat=cat, c=substitute(raw, level, rng))
         elif scenario == "intent_override":
             old = str(sample["behavior"]["override"]["old_value"])
-            text = f"I want {cat}. {substitute(old, level, rng)}"
+            lead = "I'm looking for" if keep_opener else "I want"
+            text = f"{lead} {cat}. {substitute(old, level, rng)}"
+        elif keep_opener:
+            text = f"I'm looking for {cat}, but I'm still exploring."
         else:
             text = f"I want {cat}, though I am still browsing."
+        stats["openers"] += 1
+        if _stated_category(text) is not None:
+            stats["openers_parsed"] += 1
         return text
 
     ev.customer_reply = patched_reply
@@ -265,12 +293,24 @@ def main() -> None:
     parser.add_argument("--level", type=int, default=2, choices=[0, 1, 2, 3])
     parser.add_argument("--paraphrase-category", action="store_true")
     parser.add_argument("--reword-category", action="store_true")
+    parser.add_argument(
+        "--keep-opener",
+        action="store_true",
+        help="Paraphrase the disclosures but leave the opening line in the "
+             "simulator's own wording, so slots.stated_category still parses "
+             "it. Isolates the cost of paraphrased constraints from the cost "
+             "of an unparseable opener.",
+    )
     parser.add_argument("--seed", type=int, default=20260831)
     parser.add_argument("--label", default="")
     args = parser.parse_args()
 
     stats = install_paraphrasing_customer(
-        args.level, args.paraphrase_category, args.seed, args.reword_category
+        args.level,
+        args.paraphrase_category,
+        args.seed,
+        args.reword_category,
+        args.keep_opener,
     )
 
     samples = ev.load_jsonl(args.dataset)
@@ -284,6 +324,9 @@ def main() -> None:
         "paraphrase_category": args.paraphrase_category,
         "utterances_measured": stats["utterances"],
         "mean_verbatim_overlap": round(overlap, 4),
+        "keep_opener": args.keep_opener,
+        "openers": stats["openers"],
+        "openers_parsed": stats["openers_parsed"],
         "score": result["recommended_technical_score"],
         "hit_rate_at_10": result["hit_rate_at_10"],
         "mrr": result["mrr"],
