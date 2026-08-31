@@ -30,7 +30,7 @@ not fail the same way:
 | feature | weight | under paraphrase |
 |---|---|---|
 | `slot_evidence` | 16.0 | near-silent; whole-value identity |
-| `constraint_evidence` | 12.0 | scores partial token overlap, so rewording fills it with **noise** |
+| `constraint_evidence` | 12.0 | scores partial token overlap, so rewording dilutes it (E10 called this noise; see the correction below) |
 | `category_exact` | 8.0 | inert once the E9 category filter engages |
 | `phrase_evidence` | 6.0 | silent to six decimals (E10) |
 | `lexical_rank` | 1.0 | still carries real information |
@@ -254,3 +254,41 @@ A ranking repair can recover a constraint that was reworded; it cannot
 recover one that was never said. That the gain shrinks by roughly two thirds
 exactly where the harness stops being a paraphrase probe is a small piece of
 evidence that the mechanism does what it claims and not something else.
+
+## Correction to E10: `constraint_evidence` is not noise here
+
+E10 measured that zeroing `constraint_evidence` **improved** the paraphrased
+score by +0.0157, and concluded that under rewording the feature fills with
+noise rather than falling silent. That conclusion was correct at E10's
+configuration. It is wrong at this one, and by a wide margin.
+
+Swept inside the profile, at L2:
+
+| weight | 0.0 | 3.0 | 6.0 | 12.0 (shipped) |
+|---|---|---|---|---|
+| score | 0.722575 | 0.726306 | 0.727946 | **0.733138** |
+| HitRate | 0.830 | 0.840 | 0.840 | **0.845** |
+
+Monotone increasing. Deleting the feature now **costs 0.010563** where E10
+measured it as gaining 0.0157 — the sign has flipped.
+
+The mechanism is the same one that made E10's reading correct. Partial token
+overlap is weak, dilute evidence. When it was the only feature still saying
+anything, its weight of 12.0 let that dilute signal dominate the order, and
+the ordering it produced was worse than the retrieval ordering underneath it.
+Now `lexical_rank` at 4.0 and a working `slot_evidence` carry the order, and
+the same dilute signal is demoted to what it should always have been: a
+tie-breaker that is weakly right rather than a decider that is strongly
+wrong.
+
+This is the project's standing rule — *a rejected idea is only rejected at
+the configuration you tested it on* — firing in the unusual direction. Here
+an idea that was **accepted** and priced at +0.0157 turns out to be a loss of
+0.0106 two changes later. The rule needs stating symmetrically: an accepted
+measurement expires exactly as fast as a rejected one, and the levers a
+previous phase leaves "priced and ready to ship" must be re-priced before
+they are shipped, not treated as banked.
+
+Both of E10's two priced-but-unshipped levers were re-examined here. One
+(`lexical_rank`) was adopted, conditionally, and is worth +0.027. The other
+(`constraint_evidence` -> 0) was rejected, having reversed sign.
