@@ -17,6 +17,13 @@ data/releases/
 # runtime. bge-small is excluded: that model line was discontinued by team
 # decision (E1) and its artifact is 73 MB.
 data/embeddings/bge-small-en-v1.5.*
+# Value-level embedding artifacts (E11): one vector per distinct card value,
+# 268,564 of them, so 393 MB at MiniLM's 384 dimensions and more at Voyage's
+# 2048. Research artifacts, rebuildable from scripts/build_value_embeddings.py.
+# Whether any shippable form of these is committed is a separate decision --
+# only a 256-dimension int8 build fits GitHub's 100 MB per-file limit.
+data/embeddings/*-values.npy
+data/embeddings/*-values.values.json
 SHA256SUMS
 # Organizer-only code, private evaluation data, manifests, and build reports.
 organizer/
