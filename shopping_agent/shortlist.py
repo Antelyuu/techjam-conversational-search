@@ -92,6 +92,8 @@ SHOPPING_AGENT_SHORTLIST=0 restores the always-ten behaviour.
 
 from __future__ import annotations
 
+import os
+
 # The turn from which the full list is always returned.
 #
 # Not an arbitrary cut-off: it is where asking stops paying. The clarification
@@ -132,6 +134,42 @@ EXPAND_TURN = 5
 # right; returning more starts padding again.
 NARROWING_SIZE = 1
 
+# What to return when the customer has stated constraints and no pooled
+# candidate owns any of them -- the paraphrase regime. **0 disables the clause**,
+# which is what ships, and is the change E13 measured.
+#
+# The clause used to return the full ten here, reasoning that a distribution the
+# agent cannot read is one it should stop withholding on. That reasoning is
+# sound and its remedy was backwards. The evaluator freezes `best_rank` the
+# first turn the target appears, so returning ten commits to whatever rank the
+# target happens to hold -- and under a paraphrasing customer E13 measured that
+# rank as near-uniform across 2-10 (55.5% at rank 1, then 13/11/9/11/5/9/10/11/5).
+# Showing ten at the moment the evidence is weakest locks in a coin flip.
+#
+# Falling through to the ordinary narrowing path instead defers the commitment
+# until the evidence is worth standing behind. MEASURED (E13), delta against
+# the old always-ten behaviour:
+#
+#            L2      L3      cat    heldout  structL2 structL3   mean
+#   k=5   +0.0132 +0.0198  -0.0006  +0.0071  +0.0111  +0.0028  +0.0089
+#   k=3   +0.0130 +0.0395  +0.0114  +0.0124  +0.0163  +0.0128  +0.0176
+#   k=2   +0.0185 +0.0254  +0.0127  +0.0207  +0.0239  +0.0181  +0.0199
+#   k=0   +0.0191 +0.0153  +0.0213  +0.0187  +0.0246  +0.0236  +0.0204
+#
+# 0 wins the mean and the worst case, and it is the only arm that is a deletion
+# rather than a constant -- there is no value left to overfit. It measured
+# **identical to k=1 on all seven probes**, because the `consistent == 1`
+# escape it preserves never fires under paraphrase.
+#
+# **The public score cannot move**, and that is a count rather than an argument:
+# the clause fires 0/563 turns on the verbatim public set against 284/553
+# (51.4%) at level 2, 180 of them on turn 2. Every arm above scores exactly
+# 0.945297. Set SHOPPING_AGENT_PARAPHRASE_SHORTLIST=10 to restore the old
+# behaviour; it is the kill switch, not a tuning knob.
+PARAPHRASE_SHORTLIST_SIZE = int(
+    os.environ.get("SHOPPING_AGENT_PARAPHRASE_SHORTLIST", "0")
+)
+
 
 def shortlist_size(
     turn: int,
@@ -151,12 +189,16 @@ def shortlist_size(
     """
     if not enabled:
         return top_k
-    if disclosed > 0 and live_disclosures <= 0:
+    if turn >= EXPAND_TURN:
+        # The backstop, and it must be tested BEFORE the paraphrase clause
+        # below: that clause can now return fewer than top_k, and if it were
+        # still tested first the agent would never expand at all on a
+        # paraphrased session.
+        return top_k
+    if PARAPHRASE_SHORTLIST_SIZE > 0 and disclosed > 0 and live_disclosures <= 0:
         # The customer has stated constraints and no candidate owns any of
         # them, so the agent cannot read this distribution and stops trying.
-        return top_k
-    if turn >= EXPAND_TURN:
-        return top_k
+        return min(PARAPHRASE_SHORTLIST_SIZE, top_k)
     if consistent == 1:
         # The constraints identify a single product; stand behind the ranking.
         return top_k

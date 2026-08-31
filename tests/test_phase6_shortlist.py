@@ -54,19 +54,57 @@ class ShortlistPolicyTest(unittest.TestCase):
                 f"turn {turn} should return the full list",
             )
 
-    def test_unowned_disclosures_switch_the_policy_off(self):
-        """The robustness condition. A customer who paraphrases instead of
-        quoting leaves live_disclosures at 0 on every turn, and the policy has
-        to switch itself off rather than withhold on a ranking it cannot
-        measure."""
-        for turn in range(1, 11):
+    def test_unowned_disclosures_keep_narrowing_until_the_backstop(self):
+        """P8-T2 (E13), and this assertion is the reverse of what it was.
+
+        A customer who paraphrases instead of quoting leaves live_disclosures
+        at 0 on every turn. The policy used to read that as "stop withholding"
+        and return the full ten. That reasoning was sound and its remedy was
+        backwards: the evaluator freezes `best_rank` the first turn the target
+        appears, so showing ten at the moment the evidence is weakest commits
+        to a rank E13 measured as near-uniform across 2-10.
+
+        Narrowing instead defers the commitment to a turn worth standing
+        behind, and is worth +0.0204 mean across six paraphrase probes at a
+        measured cost of exactly zero on the public set -- the clause fires
+        0/563 verbatim turns. EXPAND_TURN remains the backstop, so the agent
+        cannot withhold forever.
+        """
+        for turn in range(1, shortlist.EXPAND_TURN):
+            self.assertEqual(
+                shortlist.shortlist_size(
+                    turn, 10, live_disclosures=0, consistent=0, disclosed=3
+                ),
+                shortlist.NARROWING_SIZE,
+                f"turn {turn} committed to a ranking it could not measure",
+            )
+        for turn in range(shortlist.EXPAND_TURN, 11):
             self.assertEqual(
                 shortlist.shortlist_size(
                     turn, 10, live_disclosures=0, consistent=0, disclosed=3
                 ),
                 10,
-                f"turn {turn} withheld on a ranking it could not measure",
+                f"turn {turn} withheld past the backstop",
             )
+
+    def test_the_old_always_ten_behaviour_is_one_env_var_away(self):
+        """The kill switch, so the change is reversible without a deploy."""
+        import importlib
+        import os
+
+        os.environ["SHOPPING_AGENT_PARAPHRASE_SHORTLIST"] = "10"
+        try:
+            restored = importlib.reload(shortlist)
+            for turn in range(1, 11):
+                self.assertEqual(
+                    restored.shortlist_size(
+                        turn, 10, live_disclosures=0, consistent=0, disclosed=3
+                    ),
+                    10,
+                )
+        finally:
+            os.environ.pop("SHOPPING_AGENT_PARAPHRASE_SHORTLIST", None)
+            importlib.reload(shortlist)
 
     def test_having_said_nothing_yet_is_not_the_paraphrase_signal(self):
         """P6-T6, and the distinction the whole clause turns on.
@@ -133,14 +171,16 @@ class ConsistencySignalTest(unittest.TestCase):
         found = prepare_evidence(["please wash it in cold water"], candidates, products)
         self.assertEqual(found.live_disclosures, 0)
         self.assertEqual(found.consistent, 0)
-        # ... and that is exactly what makes the policy stand down -- but only
-        # because something *was* said. The disclosure count is what carries
-        # that half of the test; live_disclosures alone cannot.
+        # ... and the policy now *narrows* on that signal rather than padding
+        # a ten it cannot measure (P8-T2, E13). The disclosure count still
+        # carries the other half of the distinction -- "nobody owns what was
+        # said" is only meaningful once something was said -- it just no
+        # longer selects the full list.
         self.assertEqual(
             shortlist.shortlist_size(
                 1, 10, found.live_disclosures, found.consistent, disclosed=1
             ),
-            10,
+            shortlist.NARROWING_SIZE,
         )
 
     def test_nothing_disclosed_yet_is_not_evidence_either(self):
