@@ -97,7 +97,30 @@ def main() -> None:
         action="store_true",
         help="do not stop at the first hit (diagnostic; the score still reflects it)",
     )
+    parser.add_argument(
+        "--paraphrase",
+        type=int,
+        default=0,
+        choices=[0, 1, 2, 3],
+        help="replace the quoting customer with a paraphrasing one at this level "
+             "(scripts/paraphrase_eval); 0 is the benchmark's own verbatim customer",
+    )
+    parser.add_argument("--seed", type=int, default=20260831)
     args = parser.parse_args()
+
+    if args.paraphrase:
+        # Rebind rather than rely on the patch reaching us: this module imports
+        # `customer_reply` and `initial_message` by name at import time, so
+        # patching evaluator.local_evaluator alone would leave those two names
+        # pointing at the original quoting customer and the transcript would
+        # silently print a verbatim session.
+        global customer_reply, initial_message
+        from scripts.paraphrase_eval import install_paraphrasing_customer
+        import evaluator.local_evaluator as _ev
+
+        install_paraphrasing_customer(args.paraphrase, False, args.seed)
+        customer_reply = _ev.customer_reply
+        initial_message = _ev.initial_message
 
     samples = load_jsonl(args.dataset)
     catalog_ids, categories, products = catalog_index(args.catalog)
