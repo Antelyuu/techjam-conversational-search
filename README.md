@@ -473,9 +473,20 @@ split every candidate scores 0.0 and the ranking falls back to the features unde
 replays all 200 sessions through a paraphrasing customer, changing only the customer's
 outgoing text — the hidden card, the disclosure bookkeeping, the catalogue and the target
 are untouched, and level 0 reproduces 0.945497 exactly, which is what makes the rest
-trustworthy. Under synonym substitution the agent scores **0.696015** (HitRate 0.805)
-against 0.945497 verbatim. So roughly a quarter of the composite is genuinely resting on
+trustworthy. Under synonym substitution the agent scored **0.696015** (HitRate 0.805)
+against 0.945497 verbatim. So roughly a quarter of the composite was genuinely resting on
 the customer quoting the target's own text back to us.
+
+**E11 took back a third of that, and charged nothing for it.** The reranker had no idea
+which kind of customer it was talking to: four of its five heaviest features ask an
+exact-match question that a quoting simulator always answers yes to, so under rewording 34
+points of weight go silent or turn to noise and the order falls to `lexical_rank` at weight
+1.0. The agent now detects the regime — using the predicate the shortlist policy already
+computes — and behind that gate alone raises `lexical_rank` and relaxes whole-value
+ownership to a graded match. Paraphrased **0.696015 → 0.733097** (HitRate 0.805 → 0.845),
+and the public set is **identical to six decimals** in all four figures. That is not a
+tuning result but a structural one: the gate was counted at **0 firings over the 461
+disclosing turns** the public run plays, so it cannot move a score it never applies to.
 
 It also found that the fallback was not as quiet as this section used to claim. "Fails
 quietly" is a property of a feature that only *scores*; the category apparatus is a
@@ -486,11 +497,21 @@ Accepting reworded openers and order-insensitive category names is worth **+0.26
 paraphrased, and exactly 0.000000 on the public set** — the submission score, HitRate,
 MRR and MTTC are all identical to six decimals.
 
-*Given more time:* the remaining 0.269 is the paraphrased disclosures themselves. That
-needs stemming applied to both the FTS index and the evidence tokenizer together, or a
-constraint-evidence feature scored by embedding similarity rather than token containment.
-Full method, controls and held-out check in
-[docs/experiments/E10-p6-paraphrase-robustness.md](docs/experiments/E10-p6-paraphrase-robustness.md).
+*Given more time:* the honest limit is that the regime predicate is **session-cumulative**
+— one exactly-owned disclosure suppresses it for the rest of that session — so it
+under-fires on a *partially* paraphrasing split, which is the realistic case. Making it
+fractional rather than absolute is the next lever. Stemming is worth more than E10 judged,
+because the profile promotes `lexical_rank` to the feature that now carries the order, though
+it still requires moving the FTS table to `porter unicode61` so both sides stem.
+
+A second, structurally independent paraphraser was built **before** any of this was tuned,
+because the synonym lexicon is hand-written and tuning four changes against one fixture
+overfits to the fixture. It preserves 99.7% of content tokens where the synonym mode
+preserves 35.8%. Both improve, which is the bar — but by +0.0081 against +0.0371, so most of
+the headline gain reflects how harshly the synonym fixture damages retrieval, and one probe
+(structural L3) regresses. Full method, controls, the review round's defect, and a refuted
+fix in [docs/experiments/E11-p7-paraphrase-regime.md](docs/experiments/E11-p7-paraphrase-regime.md)
+and [docs/experiments/E10-p6-paraphrase-robustness.md](docs/experiments/E10-p6-paraphrase-robustness.md).
 
 ### No language understanding, and no free-form conversation
 

@@ -145,24 +145,6 @@ successful relaxation report that the customer is quoting after all, which
 would switch off the weight profile that enabled the relaxation one turn
 after it started working.
 
-## Results
-
-All numbers below were run. The three guardrail commands were executed on
-every configuration reported as adopted.
-
-| configuration | public (submitted) | L0 control | L2 paraphrased | L2 HitRate |
-|---|---|---|---|---|
-| E10 baseline `bc6b373` | 0.945497 | 0.945497 | 0.696015 | 0.805 |
-| + conditional weight profile | **0.945497** | 0.945497 | 0.723034 | 0.830 |
-| + graded ownership | **0.945497** | 0.945497 | **0.733138** | **0.845** |
-
-Public set, both changes in: HitRate 1.000, MRR 0.938657, MTTC 2.805 —
-identical to E10 in all four figures. 196 tests pass (178 inherited, 18 new).
-
-Runtime is the independent check on the "never fires publicly" claim: the L0
-run takes 26.45 s against the baseline's 26.49 s, while L2 rises to 33.50 s.
-The relaxed pass is expensive and it is not running on the public path.
-
 ## The firing rate, counted rather than inferred
 
 An unchanged public score is consistent with the profile never firing *and*
@@ -185,32 +167,11 @@ The L2 row carries a caution that the headline number does not. The regime
 fires on 83% of disclosing turns, but the *graded ownership* clears its
 threshold on only 54 of those 488 — about one turn in nine. Nearly all of the
 +0.0371 is therefore the weight profile; graded ownership is a narrow,
-targeted fix worth +0.0101 on a thin slice of turns rather than a broad
-repair. That thinness is also why its threshold curve below is bumpy: a
+targeted fix worth +0.010104 on a thin slice of turns rather than a broad
+repair. (Both figures are Jaccard-era: the split between the two halves was
+measured before the review replaced the comparison function, and was not
+re-measured after. The end-to-end totals in Results were.) That thinness is also why its threshold curve below is bumpy: a
 handful of turns changing hands moves the composite.
-
-## Sweeps
-
-Both swept with `scripts/paraphrase_profile_sweep.py`, which pays the
-catalogue parse once. The instrument was validated three times over against
-independently-run points: `lexical_rank` 1.0 reproduces the E10 baseline
-0.696015 exactly (the profile is then a no-op), 4.0 reproduces 0.723034, and
-threshold 0.7 degenerates to 0.723034 because almost nothing clears the bar.
-
-### Graded-ownership threshold, at L2
-
-| threshold | 0.3 | 0.4 | **0.5** | 0.6 | 0.7 |
-|---|---|---|---|---|---|
-| score | 0.723355 | 0.714379 | **0.733138** | 0.718234 | 0.723034 |
-| HitRate | 0.830 | 0.815 | **0.845** | 0.825 | 0.830 |
-
-0.5 is a genuine local maximum with both neighbours below it, and the high end
-degenerates correctly to the no-relaxation score. But the surface is bumpy
-rather than a plateau — 0.3 beats 0.4 — and on 200 sessions these gaps are
-four to six sessions each. **0.5 is the best measured point, not a
-well-resolved optimum.** A permissive threshold engages more turns and scores
-*worse*, which is the same lesson `constraint_evidence` teaches: under
-paraphrase, admitting noise costs more than staying silent.
 
 ## Known limitation: the predicate is session-cumulative and sticky
 
@@ -239,106 +200,203 @@ needs its own sweep and its own review. It is left for the next phase rather
 than folded in here, and it is the highest-value lever this experiment
 identifies.
 
-### `lexical_rank` inside the profile, at L2
 
-Swept twice: once with graded ownership off (isolating the weight profile) and
-once with it on (the shipped configuration).
+## Results
+
+All numbers were run. Where a figure was measured under an implementation
+that did not ship, it is labelled as such rather than quietly dropped — the
+review round below changed the comparison function, which voided a set of
+sweeps, and pretending otherwise would leave constants justified by numbers
+the shipped code cannot reproduce.
+
+| condition | E10 | E11 | change |
+|---|---|---|---|
+| **`local_evaluator` (the submission)** | 0.945497 | **0.945497** | **0** |
+| L0 verbatim control | 0.945497 | **0.945497** | **0** |
+| L1 synonyms | 0.694494 | 0.733847 | +0.039353 |
+| L2 synonyms + destructured | 0.696015 | 0.733097 | +0.037082 |
+| L3 + 40% of words dropped | 0.673673 | 0.703036 | +0.029363 |
+| L2 `--paraphrase-category` (held out) | 0.627500 | 0.652787 | +0.025287 |
+| structural L2 (held out) | 0.811102 | 0.819191 | +0.008089 |
+| structural L3 (held out) | 0.817477 | **0.806953** | **−0.010524** |
+
+Public HitRate/MRR/MTTC are 1.000 / 0.938657 / 2.805 before and after,
+identical in all four figures. 223 tests pass.
+
+**The last row is a regression and is not buried.** Structural L3 is the one
+probe on which this phase makes the agent worse. It is also the probe
+furthest from what was tuned: a second paraphraser, at its most aggressive
+level, whose transformations preserve 99.7% of content tokens. Reported
+because a held-out set that only gets consulted when it agrees is not a
+held-out set.
+
+## The two held-out paraphrasers, and why the gap between them matters
+
+The synonym paraphraser substitutes vocabulary from a hand-built ~130-entry
+lexicon. A second, structurally independent one was built before any tuning
+began, precisely so no constant here could be chosen against a single
+fixture. It inverts the mechanism: it reframes and reorders while preserving
+vocabulary, measured at 99.7% content-token retention against the synonym
+mode's 35.8%, and 0% whole-value survival against 8.9%.
+
+Both improve, which is the bar. But the sizes are very different — +0.0371 on
+the synonym fixture against +0.0081 on the structural one — and that gap is
+the honest calibration:
+
+* The synonym mode destroys tokens, so it damages retrieval *and* ranking
+  (0.249 lost). Restoring `lexical_rank` recovers a lot.
+* The structural mode leaves the token bag intact, so BM25 still retrieves
+  well and only ranking degrades (0.134 lost). There is simply less for this
+  change to recover.
+
+Read the synonym number alone and the phase looks worth +0.037. Read both and
+the fair statement is that **most of the measured gain reflects how harshly
+the synonym fixture damages retrieval**, and the portion that survives a
+vocabulary-preserving paraphrase is real but roughly a fifth the size.
+
+One caveat carried from the paraphraser's own report: the two are *not*
+independent on the detector question. The regime fires on 0.846 of disclosing
+turns under synonym and 0.860 under structural, because both destroy
+exactness. The second fixture gives an independent read on the **score**, not
+on the **detector**.
+
+## Sweeps, and which of them the review voided
+
+Swept with `scripts/paraphrase_profile_sweep.py`, which pays the catalogue
+index once. The instrument validated against independently-run points five
+times: `lexical_rank` 1.0 reproduces 0.696015, 4.0 reproduces 0.723034,
+threshold 0.7 degenerates to 0.723034 because almost nothing clears the bar,
+`constraint_evidence` 12.0 reproduces 0.733138, and threshold 0.5 reproduces
+it too.
+
+**Every sweep below was run against the Jaccard implementation of graded
+ownership, which the review replaced.** They are kept because they still
+answer the question they were asked — `lexical_rank`'s curve is dominated by
+the weight profile, not by the ownership function — but the graded-ownership
+*threshold* is now a constant inherited from a comparison function that no
+longer exists, and it has not been re-swept. That is the largest piece of
+unfinished work this experiment leaves, and it is stated here rather than
+left for someone to discover.
+
+### `lexical_rank` inside the profile, at L2 (Jaccard-era)
 
 | weight | 1.0 | 2.0 | 4.0 | 6.0 | 8.0 | 12.0 |
 |---|---|---|---|---|---|---|
 | graded off | 0.696015 | 0.711371 | 0.723034 | 0.719192 | 0.726015 | — |
 | graded on | — | 0.709058 | **0.733138** | 0.729019 | 0.735979 | 0.735259 |
-| HitRate (on) | — | 0.815 | 0.845 | 0.840 | 0.850 | 0.850 |
 
-Both sweeps show the same odd shape: a rise to 4.0, a dip at 6.0, then a
-plateau at 8-12 sitting about 0.003 above 4.0.
+Both curves show the same shape: a rise to 4.0, a dip at 6.0, a plateau at
+8-12 about 0.003 above 4.0. That agreement is **not** corroboration — both
+sweeps run the same deterministic customer over the same 200 sessions with
+the same seed, so the second re-asks identical sessions and necessarily
+reproduces identical bumps. Two runs of one fixture are one measurement.
 
-**That agreement is not the corroboration it looks like.** Both sweeps run the
-same deterministic customer over the same 200 sessions with the same seed, so
-the second sweep re-asks the identical sessions and necessarily reproduces the
-identical bumps. Two runs of one fixture are one measurement, not two, and a
-0.003 gap is about one session of HitRate.
+**Kept at 4.0 rather than moved to the measured plateau.** Not because 4.0
+scored best — it did not — but because 0.003 is about one session of HitRate
+here, and 4.0 is the value E10 reached independently by an unconditional
+sweep at a different configuration. Moving to 8.0 on this evidence would be
+tuning to a hand-built lexicon.
 
-**Kept at 4.0 rather than moved to the measured plateau at 8.0.** The
-justification is deliberately not "4.0 scored best here", because it did not.
-It is that 4.0 is the value E10 arrived at independently, by an unconditional
-sweep at a different configuration, and that this fixture cannot resolve
-0.003. Moving to 8.0 on this evidence would be tuning to a hand-built synonym
-lexicon. The question is left to the held-out paraphrasers, which are the only
-instrument here that can answer it.
+### Graded-ownership threshold, at L2 (Jaccard-era, **stale**)
 
-## Held-out check
+| threshold | 0.3 | 0.4 | 0.5 | 0.6 | 0.7 |
+|---|---|---|---|---|---|
+| score | 0.723355 | 0.714379 | **0.733138** | 0.718234 | 0.723034 |
 
-`--paraphrase-category` substitutes the category's *words*, which defeats
-E10's canonical-form category fix by construction. It is the adversarial probe
-E10 established, and nothing in this experiment was tuned against it.
-
-| | E10 | E11 | change |
-|---|---|---|---|
-| L2 `--paraphrase-category` | 0.627500 | **0.665945** | **+0.038445** |
-| HitRate | 0.715 | 0.755 | +0.040 |
-
-The gain on the held-out probe (+0.0384) is slightly *larger* than on the
-fixture the constants were chosen against (+0.0371). An overfitted change
-shows the opposite pattern, so this is evidence the mechanism is real rather
-than lexicon-shaped — which stands to reason, since neither the regime
-predicate nor Jaccard overlap knows anything about which words were swapped.
-
-## Every level, before and after
-
-| condition | E10 | E11 | change |
-|---|---|---|---|
-| `local_evaluator` (the submission) | 0.945497 | **0.945497** | **0** |
-| L0 verbatim control | 0.945497 | **0.945497** | **0** |
-| L1 synonyms | 0.694494 | 0.733117 | +0.038623 |
-| L2 synonyms + destructured | 0.696015 | 0.733138 | +0.037123 |
-| L3 + 40% of words dropped | 0.673673 | 0.686577 | +0.012904 |
-| L2 `--paraphrase-category` (held out) | 0.627500 | 0.665945 | +0.038445 |
-
-The two rows that matter most are again the ones that do not move.
-
-L3's much smaller gain is the expected shape rather than a disappointment.
-E10 records that L3 conflates paraphrasing with information loss and is a
-floor rather than a clean measurement: it deletes 40% of the words outright.
-A ranking repair can recover a constraint that was reworded; it cannot
-recover one that was never said. That the gain shrinks by roughly two thirds
-exactly where the harness stops being a paraphrase probe is a small piece of
-evidence that the mechanism does what it claims and not something else.
+0.5 was a local maximum with both neighbours below it. It is retained under
+the containment function on the strength of the end-to-end numbers in the
+Results table, not on this curve, which no longer describes the code.
 
 ## Correction to E10: `constraint_evidence` is not noise here
 
 E10 measured that zeroing `constraint_evidence` **improved** the paraphrased
-score by +0.0157, and concluded that under rewording the feature fills with
-noise rather than falling silent. That conclusion was correct at E10's
-configuration. It is wrong at this one, and by a wide margin.
-
-Swept inside the profile, at L2:
+score by +0.0157 and concluded that under rewording the feature fills with
+noise. That was correct at E10's configuration and is wrong at this one.
+Swept inside the profile at L2 (Jaccard-era, but the effect is far larger
+than the implementation change):
 
 | weight | 0.0 | 3.0 | 6.0 | 12.0 (shipped) |
 |---|---|---|---|---|
 | score | 0.722575 | 0.726306 | 0.727946 | **0.733138** |
-| HitRate | 0.830 | 0.840 | 0.840 | **0.845** |
 
-Monotone increasing. Deleting the feature now **costs 0.010563** where E10
-measured it as gaining 0.0157 — the sign has flipped.
+Monotone increasing: deleting the feature now **costs 0.010563** where E10
+measured it as gaining 0.0157. The sign has flipped.
 
-The mechanism is the same one that made E10's reading correct. Partial token
+The mechanism is the one that made E10 right at the time. Partial token
 overlap is weak, dilute evidence. When it was the only feature still saying
-anything, its weight of 12.0 let that dilute signal dominate the order, and
-the ordering it produced was worse than the retrieval ordering underneath it.
+anything, weight 12.0 let that dilute signal decide the order, and the
+ordering it produced was worse than the retrieval ordering underneath.
 Now `lexical_rank` at 4.0 and a working `slot_evidence` carry the order, and
-the same dilute signal is demoted to what it should always have been: a
-tie-breaker that is weakly right rather than a decider that is strongly
-wrong.
+the same signal is demoted to what it should always have been — a tie-breaker
+that is weakly right rather than a decider that is strongly wrong.
 
-This is the project's standing rule — *a rejected idea is only rejected at
-the configuration you tested it on* — firing in the unusual direction. Here
-an idea that was **accepted** and priced at +0.0157 turns out to be a loss of
-0.0106 two changes later. The rule needs stating symmetrically: an accepted
-measurement expires exactly as fast as a rejected one, and the levers a
-previous phase leaves "priced and ready to ship" must be re-priced before
-they are shipped, not treated as banked.
+This is the standing rule *a rejected idea is only rejected at the
+configuration you tested it on* firing in the unusual direction: an
+**accepted** measurement, priced and banked as ready to ship, turned into a
+loss two changes later. State the rule symmetrically. An accepted measurement
+expires exactly as fast as a rejected one, and a lever a previous phase hands
+over "priced" is a hypothesis, not a balance.
 
-Both of E10's two priced-but-unshipped levers were re-examined here. One
-(`lexical_rank`) was adopted, conditionally, and is worth +0.027. The other
-(`constraint_evidence` -> 0) was rejected, having reversed sign.
+Both of E10's banked levers were re-priced here. `lexical_rank` was adopted,
+conditionally, and is worth +0.027. `constraint_evidence` -> 0 was rejected.
+
+## The review round: one defect shipped, one "fix" refuted
+
+### The defect: Jaccard promoted impostors over the true owner
+
+Recorded in full in the "Adopted 2" section above. In short: dividing by the
+union charges the true owner for the length of its own card value, so under a
+compressive paraphrase it preferred whichever product owned the shortest
+phrase built from those words — the true owner scored 0.0 and a near-
+duplicate 0.667, at weight 16.0.
+
+**It hid because the fixture could not express the failure.** Level 2 is
+*expansive*: "cotton" becomes "natural plant fibre", so a disclosure is never
+shorter than its source and the length asymmetry cannot bite. Level 3 is the
+compressive one, and the threshold had been swept only at level 2. The sweep
+was honest, reproducible, and blind, because the worst case was not in the
+fixture it swept over.
+
+Generalise it: **before sweeping a parameter, ask which failure modes the
+fixture is capable of producing.** A plateau found over a fixture that cannot
+express a failure is not evidence of safety against it.
+
+Fixing it moved exactly the levels the mechanism predicts, which is the check
+that the diagnosis was right rather than merely plausible:
+
+| | Jaccard | containment | change |
+|---|---|---|---|
+| L2 (expansive — defect invisible) | 0.733138 | 0.733097 | −0.000041 |
+| L3 (compressive — defect lives here) | 0.686577 | 0.703036 | **+0.016459** |
+
+### The refuted fix: removing the length cap
+
+Containment needs a guard against a short disclosure being "contained" in a
+long value, and the first shipped one was a cap on the owned value's length.
+That cap visibly refuses honest fragments — against "Machine wash cold with
+like colors and tumble dry low", both "machine wash cold" and "tumble dry
+low" share every token they have and are refused at a ratio of 3.3. Replacing
+it with an absolute two-shared-token floor fixes that with one constant
+instead of two.
+
+Measured, it was worse on four probes of five, and **below the pre-change
+baseline on both held-out structural ones**:
+
+| | syn L2 | syn L3 | syn L2+cat | struct L2 | struct L3 |
+|---|---|---|---|---|---|
+| baseline | 0.696015 | 0.673673 | 0.627500 | 0.811102 | 0.817477 |
+| **cap (shipped)** | **0.733097** | **0.703036** | 0.652787 | **0.819191** | **0.806953** |
+| floor, no cap | 0.720809 | 0.679837 | 0.655900* | 0.773188 | 0.797113 |
+
+\* printed by the harness as `0.6559`; the only probe on which the reverted
+variant beat the shipped one.
+
+Reverted. The cap is not primarily an impostor guard — it is a noise filter,
+and admitting short fragments admits several near-duplicates for every true
+owner recovered, each credited at the table's dominant weight.
+
+The two failures in this round are mirror images and both are worth carrying.
+The defect hid because **the fixture could not express the failure**. The
+refuted fix survived reasoning because **the example could not express the
+distribution**. Neither was settled by argument; both were settled by running
+it.
