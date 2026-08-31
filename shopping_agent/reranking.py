@@ -29,6 +29,8 @@ No model, no network, no learned parameters.
 
 from __future__ import annotations
 
+import os
+
 from dataclasses import dataclass, field
 
 from typing import TYPE_CHECKING
@@ -384,6 +386,23 @@ def _slot_value(product: ProductRecord, slot_terms: list[tuple[str, float]]) -> 
     if total <= 0.0:
         return 0.0
     return matched / total
+
+
+# Measurement override for the semantic weight, default unchanged at the table
+# value above. E12 re-swept 96/192/384/768/1536 across five paraphrase probes
+# and 192 won on the mean, and outright at L2 and L3. 96 edges it on the other
+# three by under 0.002 while giving up 0.0093 at L3, the regime where the
+# customer is terse, so E11's choice stands. The house rule is that a weight
+# swept in one regime must be re-measured in another; this knob makes that
+# cheap.
+#
+# Safe to tune against paraphrased replays alone, unusually: the gate in
+# prepare_evidence zeroes this feature on a fully-quoting customer, so no
+# value of it can move the public score. That property is what makes this the
+# exception rather than a counterexample to the rule.
+_semantic_weight = os.environ.get("SHOPPING_AGENT_SEMANTIC_WEIGHT", "").strip()
+if _semantic_weight:
+    FEATURE_WEIGHTS["semantic_evidence"] = float(_semantic_weight)
 
 
 @dataclass(frozen=True)
