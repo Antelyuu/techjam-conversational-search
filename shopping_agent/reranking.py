@@ -279,6 +279,32 @@ PARAPHRASE_WEIGHTS: dict[str, float] = {
     "lexical_rank": 4.0,
 }
 
+# P7-T3: whether slot ownership falls back to a graded match under the regime.
+#
+# `slot_evidence` is the table's dominant feature at 16.0 and it asks an
+# all-or-nothing question: does the candidate hold this disclosed string as a
+# whole field value of its own? Reword one word of a nine-word value and the
+# answer is no, scored identically to a wholly unrelated product.
+#
+# Worse, the silence compounds. `slots.ownership_weights` gives weight 0.0 to
+# any disclosure *no* pooled candidate owns, on the sound reasoning that such
+# a disclosure is silence rather than evidence. Under a rewording that is
+# every disclosure, so the weights are all zero, the denominator in
+# _slot_value is zero, and the feature returns 0.0 for the whole pool. The
+# table's heaviest feature is not merely blunted, it is switched off.
+#
+# So relaxing the match alone is not enough: the selectivity weights have to
+# be recomputed against the relaxed notion of ownership too, or there is
+# nothing for the relaxed matches to be weighted by. prepare_evidence does
+# both, together, and only once the regime has fired.
+RELAXED_OWNERSHIP = True
+
+# How much of a disclosed value a candidate must account for before it counts
+# as owning it at all. Below this the match is treated as coincidence and
+# scores nothing, so a candidate sharing one common word with a long quoted
+# sentence gains no credit.
+RELAXED_OWNERSHIP_THRESHOLD = 0.5
+
 
 def weights_for(paraphrase_regime: bool) -> dict[str, float]:
     """The feature weights to score with this turn.
@@ -375,7 +401,11 @@ def _budget_value(product: ProductRecord, budget: Constraint | None) -> float:
     return max(0.0, soft_budget_closeness(product.price, target))
 
 
-def _slot_value(product: ProductRecord, slot_terms: list[tuple[str, float]]) -> float:
+def _slot_value(
+    product: ProductRecord,
+    slot_terms: list[tuple[str, float]],
+    relaxed: bool = False,
+) -> float:
     """Selectivity-weighted share of the disclosures this candidate owns.
 
     Returns 0-1. Nothing disclosed yet, or nothing any candidate owns, is a
@@ -390,6 +420,13 @@ def _slot_value(product: ProductRecord, slot_terms: list[tuple[str, float]]) -> 
         total += weight
         if value in owned:
             matched += weight
+        elif relaxed:
+            # Credit in proportion to how nearly the value is owned, so a
+            # near-miss cannot score like an identity. Below the threshold
+            # nothing is added at all.
+            overlap = slots.ownership_overlap(value, owned)
+            if overlap >= RELAXED_OWNERSHIP_THRESHOLD:
+                matched += weight * overlap
     if total <= 0.0:
         return 0.0
     return matched / total
@@ -420,6 +457,11 @@ class DisclosureEvidence:
     # from "nothing has been said yet"; holding both is what makes the
     # predicate below a measurement rather than a certainty.
     disclosed: int = 0
+    # Whether `slot_terms` were priced against the graded notion of ownership
+    # rather than the exact one. Set only when the regime fired AND some
+    # candidate cleared the threshold, so a turn where the relaxed pass also
+    # found nothing behaves exactly as before.
+    relaxed: bool = False
 
     @property
     def paraphrase_regime(self) -> bool:
@@ -469,6 +511,29 @@ def prepare_evidence(
     consistent = (
         sum(1 for owned in pool if all(value in owned for value in live)) if live else 0
     )
+
+    # The customer said things and not one pooled candidate owns any of them.
+    # Re-price selectivity against the graded match, because the exact weights
+    # are all zero here by construction and would leave the feature inert.
+    relaxed = False
+    if RELAXED_OWNERSHIP and not live:
+        overlaps = [
+            [slots.ownership_overlap(value, owned) for owned in pool]
+            for value in normalized
+        ]
+        relaxed_counts = [
+            sum(1 for score in row if score >= RELAXED_OWNERSHIP_THRESHOLD)
+            for row in overlaps
+        ]
+        if any(relaxed_counts):
+            weights = slots.ownership_weights(relaxed_counts, len(pool))
+            relaxed = True
+
+    # `live_disclosures` and `consistent` stay EXACT deliberately. They are
+    # what shortlist.py and `paraphrase_regime` read, and deriving them from
+    # the relaxed pass would let a successful relaxation report that the
+    # customer is quoting after all -- switching off the weight profile that
+    # enabled the relaxation, one turn after it started working.
     return DisclosureEvidence(
         tokens,
         phrases,
@@ -476,6 +541,7 @@ def prepare_evidence(
         len(live),
         consistent,
         len(normalized),
+        relaxed,
     )
 
 
@@ -506,6 +572,7 @@ def score_candidate(
     slot_terms: list[tuple[str, float]] | None = None,
     stated_category: str | None = None,
     weights: dict[str, float] | None = None,
+    relaxed_ownership: bool = False,
 ) -> RerankedCandidate:
     """Score one candidate against the feature checklist, in order.
 
@@ -556,7 +623,7 @@ def score_candidate(
         "phrase_evidence": evidence.phrase_coverage_from(
             evidence.phrase_text(product), disclosure_phrases
         ),
-        "slot_evidence": _slot_value(product, slot_terms),
+        "slot_evidence": _slot_value(product, slot_terms, relaxed_ownership),
         "category_exact": (
             1.0
             if stated_category and product.coarse_category == stated_category
@@ -614,6 +681,7 @@ def rerank(
             slot_terms=prepared.slot_terms,
             stated_category=stated_category,
             weights=weights,
+            relaxed_ownership=prepared.relaxed,
         )
         for candidate in candidates
         if candidate.parent_asin in products
