@@ -345,6 +345,33 @@ MIN_SHARED_TOKENS = 2
 # How much longer an owned value may be than the disclosure before containment
 # stops meaning anything. "cotton" is contained in "100% cotton blend twill
 # lining" at a ratio of 5, and crediting that in full is the E7/E8 impostor.
+#
+# **This has a known cost, and it was measured rather than argued away.** The
+# cap also refuses honest *fragments* of a long value -- against "Machine
+# wash cold with like colors and tumble dry low" (10 tokens), both "machine
+# wash cold" and "tumble dry low" share every token they have and are still
+# refused at a ratio of 3.3. Those are the true owner's own words, and a
+# customer summarising rather than expanding produces exactly them.
+#
+# Removing the cap in favour of an absolute two-shared-token floor -- one
+# constant instead of two, and no honest fragment refused -- measured worse
+# on four of five probes, and below the pre-change baseline on both held-out
+# structural ones:
+#
+#                    syn L2    syn L3    syn L2+cat  struct L2  struct L3
+#   baseline         0.696015  0.673673  0.627500    0.811102   0.817477
+#   with cap         0.733097  0.703036  0.652787    0.819191   0.806953
+#   floor, no cap    0.720809  0.679837  0.655900    0.773188   0.797113
+#
+# So the cap is not really an impostor guard; it is a noise filter. Admitting
+# short fragments admits several near-duplicates for every true owner
+# recovered, each credited at the weight of the table's dominant feature.
+# The unit-level example above is genuine and unrepresentative at once.
+#
+# If this is revisited, the principled move is a *looser* cap rather than
+# none: 4.0 admits the 3.3 fragments while still refusing "cotton" at 5.0.
+# That is a mechanism argument rather than score-chasing, and it has not been
+# measured.
 MAX_LENGTH_RATIO = 3.0
 
 

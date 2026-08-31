@@ -105,15 +105,31 @@ the regime firing also drives `shortlist.py` to return all ten, a misfire can
 push the target out of the ten and lose the hit outright rather than only the
 rank.
 
-Shipped instead is **containment with two guards**: at least two shared
-tokens, and a cap on how much longer the owned value may be than the
-disclosure. The true owner now scores 1.0, the impostor also scores 1.0, and
+Shipped instead is **containment with an absolute floor of two shared
+tokens**. The true owner now scores 1.0, the impostor also scores 1.0, and
 the "cotton" case is refused outright at 0.0 rather than the 0.2 Jaccard gave
 it. A tie is the honest outcome — both products genuinely account for what
 was said, so the order should fall to other features. Failing to discriminate
 is a far cheaper error than discriminating backwards. Selectivity does the
 remaining work: `ownership_weights` re-prices down any value much of the pool
 accounts for.
+
+**A length cap was tried as that guard first, and was itself a defect.**
+Refusing any owned value more than 3x the disclosure's length looks like the
+same protection and is not — it refuses honest fragments of a long value.
+Against "Machine wash cold with like colors and tumble dry low":
+
+| disclosure | shared / wanted | ratio | under the cap |
+|---|---|---|---|
+| `machine wash cold` | 3 / 3 | 3.3 | **refused** |
+| `tumble dry low` | 3 / 3 | 3.3 | **refused** |
+| `wash cold with like colors` | 5 / 5 | 2.0 | 1.0 |
+
+The first two are the true owner's own words, scored 0.0 for quoting a long
+value briefly — which is precisely what a summarising customer does, and so
+the same compressive case Jaccard had already got wrong. The token floor
+refuses the impostor without refusing them, and needs one constant instead of
+two.
 
 **Why the first round of measurement did not catch it, which is the more
 useful lesson.** `paraphrase_eval` level 2 is *expansive* — "cotton" becomes
