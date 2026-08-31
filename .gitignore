@@ -32,6 +32,7 @@ tests/test_organizer_pipeline.py
 # part of the submission.
 *.log
 .claude/
+CLAUDE.md
 PROGRESS.md
 handoffs/
 route_weight_sweep.json
