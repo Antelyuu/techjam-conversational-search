@@ -127,60 +127,49 @@ An agent that only works when handed the answer key is not a shopping assistant;
 lookup table. So we measured what happens when the customer stops quoting, and built for
 it.
 
-### A real paraphrased session
+### Talking to it normally
 
-Below is a genuine transcript, not an illustration. The customer's requirements have been
-reworded so that **not one content word survives**, and the agent still identifies the
-product at rank 1. Reproduce it with:
+Below is a real transcript. The customer's messages are ordinary English, written by
+hand — no requirement is quoted from the product's description, and the agent sees
+nothing else. Reproduce it with:
 
 ```bash
-python3 -m scripts.demo_session --sample-id public_0049 --paraphrase 2
+python3 -m scripts.natural_session
 ```
-
-The hidden requirements the customer is working from:
-
-```
-  hard  leather
-  hard  color: brown
-  soft  Rubber sole
-  soft  👟BEST MATERIAL.These mens shoes casual slip on has premium microfiber
-        leather upper,soft rubber sole.It's a good choice for outdoor all season
-```
-
-The agent never sees any of that. It sees only these messages:
 
 ```text
---- turn 1 ---------------------------------------------------------------
-customer  I want Shoes Loafers & Slip-Ons, though I am still browsing.
+target    B08G4WVYLJ  Dacomfy Mens Slip On Shoes, Men's Loafers & Slip-ons
+category  Shoes Loafers & Slip-Ons
+
+--- turn 1 ------------------------------------------------------------
+customer  Hi, I'm looking for some loafers or slip-ons - shoes I can just
+          step into.
 agent     Here are the closest matches based on category=shoes.
           Is there anything else that matters to you?
-returns   1 recommendation
-              1. B08T1Z77KP  UIN Women's Walking Travel Shoes Slip On Canvas…
 
---- turn 2 ---------------------------------------------------------------
-customer  What I care about is that it is shade is chestnut coloured;
-          tanned animal hide.
-agent     Here are the closest matches based on category=shoes.
+--- turn 2 ------------------------------------------------------------
+customer  Brown leather, ideally. Nothing that looks cheap.
+agent     Here are the closest matches based on category=shoes,
+          color=brown, material=leather.
           Is there anything else that matters to you?
-returns   1 recommendation
-              1. B00BS2DIU8  WHITE MOUNTAIN Headsail Brown Oxford Size 9.5 M
 
---- turn 3 ---------------------------------------------------------------
-customer  What I care about is that it is vulcanised latex underside;
-          👟BEST substance.These gentlemen shoes informal slip on has premium
-          microfiber tanned animal hide upper,gentle to the touch vulcanised
-          latex underside.It's a good choice for outdoor all season.
-agent     Here are the closest matches based on category=shoes, use_case=outdoor.
-returns   >>  1. B08G4WVYLJ  Dacomfy Mens Slip On Shoes, Men's Loafers &
-                             Slip-ons Leather …
-          ** target found at rank 1 **
+--- turn 3 ------------------------------------------------------------
+customer  They should have a microfibre leather upper and a soft rubber
+          sole - I want something I can wear outdoors in any season.
+agent     Here are the closest matches based on category=shoes,
+          color=brown, material=leather.
+          >>> target at rank 1
 ```
 
-`leather` became **"tanned animal hide"**. `color: brown` became **"shade is chestnut
-coloured"**. `Rubber sole` became **"vulcanised latex underside"**. Exact-ownership
-matching scores zero on all three — every mechanism that carries the public benchmark is
-silent here — and the agent still converges, because the embedding model recognises that
-"tanned animal hide" and "leather" mean the same thing.
+The agent reads a category out of a conversational greeting, accumulates `color=brown`
+and `material=leather` from a fragment with no grammar to speak of, and converges on one
+product out of 50,000 once the customer describes what makes it distinctive — in their own
+words, matched by meaning rather than by string equality.
+
+**One conversation is an illustration, not evidence.** It shows what using the agent is
+like; it says nothing about the distribution. The numbers below come from replaying all
+200 benchmark sessions through an automated paraphrasing customer, which is the claim you
+should actually weigh.
 
 ### Opening the conversation
 
@@ -378,6 +367,7 @@ python3 -m evaluator.local_evaluator                      # the official harness
 python3 -m unittest discover -s tests -t .                # 237 tests
 python3 -m scripts.demo_session --scenario buying         # one readable transcript
 python3 -m scripts.demo_session --paraphrase 2            # …with a paraphrasing customer
+python3 -m scripts.natural_session                        # a hand-written conversation
 pip install -r requirements.txt                           # OPTIONAL — enables mechanism 5
 ```
 
