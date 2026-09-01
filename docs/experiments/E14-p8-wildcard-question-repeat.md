@@ -126,6 +126,51 @@ this document rather than in a footnote.
 
 ---
 
+## Code review, and a cap that did not bind
+
+Review of this change found that `WILDCARD_REPEAT_CAP` bounds an unbroken *run*
+rather than a session total — a specific question in between resets the counter, so
+the wildcard can still be asked on most turns of a session. That is true, and the
+comments here originally overstated it ("cannot ask the same open question for the
+whole session"). Corrected: measured on a paraphrased replay, sessions ask the
+wildcard **1–4 times in total, median 3**, out of roughly three to five questions.
+The eight-in-a-row transcript the uncapped form produced does not occur.
+
+Following that up found a **sharper defect the review did not name: the cap was not
+binding at all in some sessions.** The test was
+
+```python
+if exempt and state.consecutive_wildcard >= WILDCARD_REPEAT_CAP:
+```
+
+which short-circuits whenever `exempt` is False — and the wildcard is available
+without the exemption in two real situations: the first ask of a session, before it
+enters `asked_attributes`; and after an override, which calls
+`asked_attributes.discard()` so the displaced question can be re-asked. Traced on a
+real session:
+
+```
+turn1: chose='other'  consecutive_wildcard=0  paraphrasing=False  other_in_asked=False
+turn2: chose='other'  consecutive_wildcard=1  paraphrasing=True   other_in_asked=True
+turn3: chose='other'  consecutive_wildcard=2  paraphrasing=True   other_in_asked=True
+turn4: chose='other'  consecutive_wildcard=3  paraphrasing=False  other_in_asked=False
+```
+
+**17 of 200 sessions ran the open question four consecutive times against a cap of
+three.** The cap now applies however the wildcard became available.
+
+| | before fix | after fix |
+|---|---|---|
+| longest consecutive run | **4** (17 sessions) | **3** |
+| public | 0.945297 / 1.000 | **0.945297 / 1.000** |
+| L2 | 0.875897 / 0.965 | 0.875880 / 0.965 |
+| structural L2 | 0.936003 / 0.995 | 0.935718 / 0.995 |
+
+The public set never reaches the cap — its longest run is two, in 10 of 200 sessions
+— so binding it unconditionally cannot move the scored number, and does not. The
+paraphrase cost is 0.000017 and 0.000285, which is the price of a guarantee that
+actually holds; the alternative was to keep the faster number and delete the claim.
+
 ## Open items
 
 1. **Disclosure *quality* is now a live question**, raised by the regression:

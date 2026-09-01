@@ -173,3 +173,54 @@ class FallbackTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WildcardCapBindsUnconditionallyTest(unittest.TestCase):
+    """E14 review finding: the cap has to bind however the wildcard arrived.
+
+    The first implementation tested `exempt and consecutive_wildcard >= CAP`,
+    which short-circuits whenever `exempt` is False -- and the wildcard is
+    available without the exemption in two real situations: the first ask of a
+    session, and after an override calls `asked_attributes.discard()` so the
+    displaced question can be re-asked. Measured on a paraphrased replay, 17 of
+    200 sessions ran the open question four times consecutively against a cap
+    of three before this was fixed.
+    """
+
+    def state(self, consecutive, asked):
+        from shopping_agent.contracts import SessionState
+
+        s = SessionState(session_id="s", user_profile={})
+        s.consecutive_wildcard = consecutive
+        s.asked_attributes = set(asked)
+        return s
+
+    def choose(self, state, paraphrasing):
+        return clarification.choose_attribute(
+            state, [], allow_wildcard=True, paraphrasing=paraphrasing
+        )
+
+    def test_at_the_cap_the_wildcard_is_refused_even_when_unasked(self):
+        # `asked` is empty, so nothing but the cap can withhold the wildcard.
+        for paraphrasing in (True, False):
+            with self.subTest(paraphrasing=paraphrasing):
+                chosen = self.choose(
+                    self.state(clarification.WILDCARD_REPEAT_CAP, set()), paraphrasing
+                )
+                self.assertNotEqual(chosen, clarification.WILDCARD_ATTRIBUTE)
+
+    def test_below_the_cap_the_wildcard_is_still_available(self):
+        chosen = self.choose(
+            self.state(clarification.WILDCARD_REPEAT_CAP - 1, set()), True
+        )
+        self.assertEqual(chosen, clarification.WILDCARD_ATTRIBUTE)
+
+    def test_a_specific_question_resets_the_run(self):
+        """The documented behaviour, asserted so the limitation is explicit:
+        the cap bounds a *run*, not a session total."""
+        from shopping_agent.orchestrator import ConversationOrchestrator
+
+        s = self.state(clarification.WILDCARD_REPEAT_CAP, set())
+        ConversationOrchestrator.record_question(s, "material")
+        self.assertEqual(s.consecutive_wildcard, 0)
+        self.assertEqual(self.choose(s, True), clarification.WILDCARD_ATTRIBUTE)

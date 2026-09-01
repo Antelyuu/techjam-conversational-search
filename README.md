@@ -200,7 +200,7 @@ Replaying all 200 public sessions through a paraphrasing customer:
 
 | | before | **after** |
 |---|---|---|
-| paraphrased TechnicalScore | 0.696015 | **0.875897** |
+| paraphrased TechnicalScore | 0.696015 | **0.875880** |
 | paraphrased Hit Rate@10 | 0.805 | **0.965** |
 | **public TechnicalScore** | 0.945497 | **0.945297** |
 
@@ -288,7 +288,7 @@ Nothing that can go wrong is allowed to cost a session, and no degradation is si
 - every degradation prints its reason once to stderr, so a degraded run is visible rather
   than merely scoring lower.
 
-**237 unit tests** cover this, standard library only, in about three seconds — including
+**240 unit tests** cover this, standard library only, in about three seconds — including
 the semantic feature's own degradation paths, which run against a synthetic artifact so
 the suite never loads a model.
 
@@ -364,7 +364,7 @@ that scales with traffic.
 
 ```bash
 python3 -m evaluator.local_evaluator                      # the official harness
-python3 -m unittest discover -s tests -t .                # 237 tests
+python3 -m unittest discover -s tests -t .                # 240 tests
 python3 -m scripts.demo_session --scenario buying         # one readable transcript
 python3 -m scripts.demo_session --paraphrase 2            # …with a paraphrasing customer
 python3 -m scripts.natural_session                        # a hand-written conversation

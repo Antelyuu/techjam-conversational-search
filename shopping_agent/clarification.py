@@ -98,9 +98,13 @@ WILDCARD_ATTRIBUTE = "other"
 # only because it has already spent the questions worth asking.
 REPEAT_WILDCARD = os.environ.get("SHOPPING_AGENT_REPEAT_WILDCARD", "0") == "1"
 
-# Most consecutive open questions the exemption allows. Uncapped, a paraphrasing
-# session asks "other" for all eight of its clarification turns, which is a poor
-# transcript regardless of what it scores. Swept in E14.
+# Most consecutive open questions allowed. **This bounds a run, not a session
+# total**: a specific question in between resets the counter, so a session can
+# still ask the wildcard more times than this in total. Measured on a
+# paraphrased replay, sessions ask it 1-4 times in total (median 3) out of
+# roughly three to five questions, and the eight-in-a-row transcript the
+# uncapped form produced does not occur. Bounding the total as well would be a
+# separate change and is not measured. Swept in E14.
 WILDCARD_REPEAT_CAP = int(os.environ.get("SHOPPING_AGENT_WILDCARD_CAP", "3"))
 
 # There are only six real attributes and roughly nine usable turns, so the
@@ -226,13 +230,10 @@ def choose_attribute(
     unavailable = set(state.rejected_attributes) | fixed | DEAD_ATTRIBUTES
     if not allow_repeats:
         asked = set(state.asked_attributes)
-        exempt = paraphrasing or REPEAT_WILDCARD
-        if exempt and state.consecutive_wildcard >= WILDCARD_REPEAT_CAP:
-            # Bounded so the agent cannot ask the same open question for the
-            # whole session. Dialogue quality is a judged criterion and
-            # "what else matters?" eight times running is a bad transcript
-            # whatever it scores.
-            exempt = False
+        exempt = (
+            (paraphrasing or REPEAT_WILDCARD)
+            and state.consecutive_wildcard < WILDCARD_REPEAT_CAP
+        )
         if exempt:
             # The no-repeat rule exists because a specific attribute goes
             # stale: ask "color" twice and the second ask can only return the
@@ -241,6 +242,23 @@ def choose_attribute(
             # repetition -- it always targets whatever is left on the card.
             asked -= {WILDCARD_ATTRIBUTE}
         unavailable |= asked
+
+    # The cap binds however the wildcard became available, not only when the
+    # exemption above put it there. REVIEW FINDING (E14): the first check was
+    # `exempt and consecutive_wildcard >= CAP`, which short-circuits whenever
+    # `exempt` is False -- so a wildcard that was available for either of the
+    # other two reasons slipped past it. Both occur:
+    #
+    #   * the first ask of a session, before it is in `asked_attributes`;
+    #   * an override, which calls `asked_attributes.discard(attribute)` so the
+    #     displaced question can be re-asked (state.apply_candidates).
+    #
+    # Counted on a paraphrased replay before the fix: 17 of 200 sessions ran
+    # the open question four times consecutively against a cap of three. The
+    # public set never reaches the cap at all -- its longest run is two, in 10
+    # of 200 sessions -- so binding it unconditionally cannot move the score.
+    if state.consecutive_wildcard >= WILDCARD_REPEAT_CAP:
+        unavailable |= {WILDCARD_ATTRIBUTE}
     if not allow_wildcard:
         # The open question now competes in the table rather than sitting
         # behind it, so the ablation flag has to exclude it here to still mean
