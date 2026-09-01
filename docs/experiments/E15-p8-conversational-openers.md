@@ -31,7 +31,7 @@ real customer does:
 | `I'm in the market for shoes loafers & slip-ons` | ❌ |
 
 A missing category is not a crash — it stands the E9 filter down and retrieval widens from
-a median **184 rows to all 50,000**. Measured cost of that fallback on the public set is
+a median **181 rows to all 50,000**. Measured cost of that fallback on the public set is
 about 0.003 (`SHOPPING_AGENT_CATFILTER=0` scores 0.942229), but that figure is taken with
 every other mechanism working; on a genuinely conversational opener the practical cost is
 larger, because every later mechanism then works against 270× more impostors.

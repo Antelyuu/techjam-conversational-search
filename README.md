@@ -84,7 +84,7 @@ benchmark, and the fifth is what happens when it does not hold.
 **1 · Search only the relevant category** — `shopping_agent/slots.py`
 The opening message always names a coarse category, and the target reproduces that string
 by definition. Restricting retrieval to it reduces the search space from 50,000 products
-to a median of **184**. Verified safe before adoption: zero disagreements across all
+to a median of **181**. Verified safe before adoption: zero disagreements across all
 50,000 products, and zero extraction failures across the 200 sessions.
 
 **2 · Ask the question with the best expected yield** — `shopping_agent/clarification.py`
@@ -187,7 +187,7 @@ silent here — and the agent still converges, because the embedding model recog
 The same concern applies to the customer's *first* message. The simulator always opens
 with one of a handful of phrasings, so we originally recognised only those — and a real
 customer who asks a question instead got no category at all, which widens retrieval from a
-median 184 products to all 50,000.
+median 181 products to all 50,000.
 
 The agent now identifies the category by looking for it, rather than by looking for the
 phrasing around it:
